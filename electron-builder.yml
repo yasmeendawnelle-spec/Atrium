@@ -1,0 +1,27 @@
+appId: dev.atrium.desktop
+productName: Atrium
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - build/icon.png
+  - build/icon.ico
+asar: true
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  # Local builds are unsigned; signExecutable: false skips code signing while keeping exe icon and metadata.
+  signExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: ${productName}-Setup-${version}.${ext}
+# Live Cloudflare Worker update feed (served via deployed atrium-updates Worker).
+publish:
+  provider: generic
+  url: https://updates.rpulse.top/win

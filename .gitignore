@@ -1,0 +1,31 @@
+node_modules/
+out/
+dist/
+dist-*/
+src/renderer/src/generated/
+
+# Installers & packages
+*.exe
+*.blockmap
+*.dmg
+*.AppImage
+
+# Secrets & certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Logs & OS / editor / wrangler files
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.wrangler/
+
+# Local developer launcher
+启动Atrium.cmd
