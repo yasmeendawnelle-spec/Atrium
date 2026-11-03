@@ -1,0 +1,274 @@
+/* Atrium design tokens — Soft, warm studio aesthetic.
+   Muted warm stone sidebar framing a gently elevated alabaster sheet,
+   soft clay terracotta accents, subtle diffused shadows, and clean CJK sans-serif legibility. */
+:root {
+  color-scheme: light;
+
+  /* Layered Surfaces */
+  --bg-shell: #f1eee7; /* outer frame & sidebar */
+  --bg-side: #f1eee7;
+  --bg: #faf8f4; /* elevated main sheet */
+  --surface: #ffffff; /* cards, composer, dialogs */
+  --subtle: #f2efe8; /* pills, tracks, secondary fills */
+  --bubble: #efeae0; /* user message bubble */
+
+  /* Ink */
+  --ink: #22211f;
+  --ink-2: #4a4843;
+  --muted: #78756e;
+  --faint: #a39f96;
+
+  /* Accent: soft terracotta clay */
+  --accent: #c46342;
+  --accent-hover: #b35536;
+  --accent-ink: #ffffff;
+  --accent-text: #ae4f30;
+  --accent-soft: #d67a5a;
+  --accent-tint: rgba(196, 99, 66, 0.11);
+  --accent-border: rgba(196, 99, 66, 0.28);
+
+  /* Status */
+  --ok: #2e7a52;
+  --ok-tint: rgba(46, 122, 82, 0.11);
+  --danger: #ba3e35;
+  --danger-tint: rgba(186, 62, 53, 0.1);
+  --danger-solid: #c44034;
+  --danger-solid-hover: #ae3328;
+  --warn: #9e6508;
+  --warn-tint: rgba(196, 130, 22, 0.12);
+
+  /* Lines and states */
+  --line: rgba(34, 33, 31, 0.075);
+  --line-strong: rgba(34, 33, 31, 0.13);
+  --hover: rgba(34, 33, 31, 0.045);
+  --active: rgba(34, 33, 31, 0.075);
+  --code-bg: #f4f1ea;
+
+  --shadow-card: 0 2px 10px -2px rgba(28, 25, 20, 0.045), 0 1px 2px rgba(28, 25, 20, 0.025);
+  --shadow-composer: 0 10px 32px -8px rgba(28, 25, 20, 0.07), 0 2px 6px rgba(28, 25, 20, 0.03);
+  --shadow-composer-focus: 0 14px 38px -8px rgba(196, 99, 66, 0.12), 0 2px 8px rgba(28, 25, 20, 0.04);
+  --shadow-sheet: -6px 0 28px -8px rgba(24, 20, 16, 0.06);
+  --shadow-float: 0 20px 52px -12px rgba(28, 25, 20, 0.22), 0 2px 8px rgba(28, 25, 20, 0.06);
+  --scrim: rgba(24, 22, 18, 0.34);
+
+  /* Type: crisp, friendly sans-serif everywhere for CJK; Source Serif 4 only for Latin display nuance */
+  --font-ui: 'Albert Sans Variable', 'Albert Sans', 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Noto Sans SC', system-ui, sans-serif;
+  --font-display: 'Source Serif 4 Variable', 'Source Serif 4', 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Noto Sans SC', sans-serif;
+  --font-reading: 'Albert Sans Variable', 'Albert Sans', 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Noto Sans SC', system-ui, sans-serif;
+  --font-code: 'IBM Plex Mono', 'Cascadia Mono', Consolas, 'Microsoft YaHei UI', monospace;
+
+  --t-12: 12px;
+  --t-13: 13px;
+  --t-14: 14px;
+  --t-15: 15px;
+  --t-16: 16px;
+  --t-18: 18px;
+  --t-22: 22px;
+  --t-28: 28px;
+  --t-34: 34px;
+  --t-40: 40px;
+
+  --r-chip: 999px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-composer: 20px;
+
+  --sidebar-w: 294px;
+  --measure: 740px;
+  --code-size: 13px;
+  --topbar-h: 48px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --tok-comment: #8a8279;
+  --tok-string: #2b7a4b;
+  --tok-keyword: #b54524;
+  --tok-type: #7c4d9c;
+  --tok-number: #a85d19;
+  --tok-func: #1f5f99;
+  --tok-prop: #6e5239;
+  --tok-op: #6f685f;
+  --tok-add: #216e3e;
+  --tok-add-bg: rgba(43, 122, 75, 0.11);
+  --tok-del: #b6362d;
+  --tok-del-bg: rgba(182, 54, 45, 0.10);
+  --tok-hunk: #1f5f99;
+}
+
+:root[data-transcript-width='narrow'] { --measure: 620px; }
+:root[data-transcript-width='wide'] { --measure: 960px; }
+
+:root[data-theme='light'][data-code-theme-light='github'],
+.code-preview-surface[data-preview-mode='light'][data-preview-preset='github'] {
+  --code-bg: #f6f8fa;
+  --tok-comment: #6e7781;
+  --tok-string: #0a3069;
+  --tok-keyword: #cf222e;
+  --tok-type: #8250df;
+  --tok-number: #0550ae;
+  --tok-func: #6639ba;
+  --tok-prop: #953800;
+  --tok-op: #57606a;
+  --tok-add: #1a7f37;
+  --tok-add-bg: rgba(26, 127, 55, 0.12);
+  --tok-del: #cf222e;
+  --tok-del-bg: rgba(207, 34, 46, 0.11);
+  --tok-hunk: #0969da;
+}
+
+:root[data-theme='light'][data-code-theme-light='paper'],
+.code-preview-surface[data-preview-mode='light'][data-preview-preset='paper'] {
+  --code-bg: #f8f5ef;
+  --tok-comment: #8c7b6b;
+  --tok-string: #2c6e49;
+  --tok-keyword: #9e3d21;
+  --tok-type: #694982;
+  --tok-number: #9c5b1b;
+  --tok-func: #245780;
+  --tok-prop: #734c29;
+  --tok-op: #746658;
+  --tok-add: #22663c;
+  --tok-add-bg: rgba(44, 110, 73, 0.12);
+  --tok-del: #a6342a;
+  --tok-del-bg: rgba(166, 52, 42, 0.11);
+  --tok-hunk: #245780;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-shell: #151513;
+  --bg-side: #151513;
+  --bg: #1e1e1b;
+  --surface: #272623;
+  --subtle: #31302c;
+  --bubble: #2c2a26;
+
+  --ink: #edece6;
+  --ink-2: #c7c5bc;
+  --muted: #949188;
+  --faint: #68665e;
+
+  --accent: #ce6e4e;
+  --accent-hover: #da7b5b;
+  --accent-ink: #ffffff;
+  --accent-text: #e58e6c;
+  --accent-soft: #de8466;
+  --accent-tint: rgba(206, 110, 78, 0.15);
+  --accent-border: rgba(206, 110, 78, 0.34);
+
+  --ok: #6ec295;
+  --ok-tint: rgba(110, 194, 149, 0.14);
+  --danger: #f08a82;
+  --danger-tint: rgba(240, 138, 130, 0.14);
+  --danger-solid: #d45044;
+  --danger-solid-hover: #e05e52;
+  --warn: #e3ad55;
+  --warn-tint: rgba(227, 173, 85, 0.14);
+
+  --line: rgba(237, 236, 230, 0.075);
+  --line-strong: rgba(237, 236, 230, 0.14);
+  --hover: rgba(255, 255, 255, 0.045);
+  --active: rgba(255, 255, 255, 0.08);
+  --code-bg: #181715;
+
+  --shadow-card: 0 4px 14px -2px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.18);
+  --shadow-composer: 0 12px 36px -8px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-composer-focus: 0 16px 42px -8px rgba(0, 0, 0, 0.52), 0 2px 10px rgba(206, 110, 78, 0.12);
+  --shadow-sheet: -8px 0 32px -8px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 24px 56px -12px rgba(0, 0, 0, 0.65), 0 2px 10px rgba(0, 0, 0, 0.35);
+  --scrim: rgba(0, 0, 0, 0.56);
+
+  --tok-comment: #888177;
+  --tok-string: #72c48c;
+  --tok-keyword: #eb8260;
+  --tok-type: #c59ee8;
+  --tok-number: #e0a763;
+  --tok-func: #76b6eb;
+  --tok-prop: #d6ba9a;
+  --tok-op: #a59d94;
+  --tok-add: #7dd399;
+  --tok-add-bg: rgba(114, 196, 140, 0.14);
+  --tok-del: #ef7c74;
+  --tok-del-bg: rgba(239, 124, 116, 0.14);
+  --tok-hunk: #76b6eb;
+}
+
+.code-preview-surface[data-preview-mode='light'] {
+  color-scheme: light;
+  --ink: #272521;
+  --muted: #6f6a61;
+  --faint: #a19a90;
+  --line: rgba(39, 37, 33, 0.085);
+  --code-bg: #f6f4ef;
+  --tok-comment: #8a8279;
+  --tok-string: #2b7a4b;
+  --tok-keyword: #b54524;
+  --tok-type: #7c4d9c;
+  --tok-number: #a85d19;
+  --tok-func: #1f5f99;
+  --tok-prop: #6e5239;
+  --tok-op: #6f685f;
+  --tok-add: #216e3e;
+  --tok-add-bg: rgba(43, 122, 75, 0.12);
+  --tok-del: #b6362d;
+  --tok-del-bg: rgba(182, 54, 45, 0.11);
+}
+
+.code-preview-surface[data-preview-mode='dark'] {
+  color-scheme: dark;
+  --ink: #edece6;
+  --muted: #949188;
+  --faint: #68665e;
+  --line: rgba(237, 236, 230, 0.10);
+  --code-bg: #181715;
+  --tok-comment: #888177;
+  --tok-string: #72c48c;
+  --tok-keyword: #eb8260;
+  --tok-type: #c59ee8;
+  --tok-number: #e0a763;
+  --tok-func: #76b6eb;
+  --tok-prop: #d6ba9a;
+  --tok-op: #a59d94;
+  --tok-add: #7dd399;
+  --tok-add-bg: rgba(114, 196, 140, 0.16);
+  --tok-del: #ef7c74;
+  --tok-del-bg: rgba(239, 124, 116, 0.16);
+}
+
+:root[data-theme='dark'][data-code-theme-dark='monokai'],
+.code-preview-surface[data-preview-mode='dark'][data-preview-preset='monokai'] {
+  --code-bg: #1f201c;
+  --tok-comment: #75715e;
+  --tok-string: #e6db74;
+  --tok-keyword: #f92672;
+  --tok-type: #66d9ef;
+  --tok-number: #ae81ff;
+  --tok-func: #a6e22e;
+  --tok-prop: #fd971f;
+  --tok-op: #f8f8f2;
+  --tok-add: #a6e22e;
+  --tok-add-bg: rgba(166, 226, 46, 0.15);
+  --tok-del: #f92672;
+  --tok-del-bg: rgba(249, 38, 114, 0.15);
+  --tok-hunk: #66d9ef;
+}
+
+:root[data-theme='dark'][data-code-theme-dark='nord'],
+.code-preview-surface[data-preview-mode='dark'][data-preview-preset='nord'] {
+  --code-bg: #232832;
+  --tok-comment: #6f7c91;
+  --tok-string: #a3be8c;
+  --tok-keyword: #81a1c1;
+  --tok-type: #8fbcbb;
+  --tok-number: #b48ead;
+  --tok-func: #88c0d0;
+  --tok-prop: #d08770;
+  --tok-op: #eceff4;
+  --tok-add: #a3be8c;
+  --tok-add-bg: rgba(163, 190, 140, 0.16);
+  --tok-del: #bf616a;
+  --tok-del-bg: rgba(191, 97, 106, 0.18);
+  --tok-hunk: #88c0d0;
+}
