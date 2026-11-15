@@ -1,0 +1,12 @@
+name = "atrium-updates"
+main = "src/index.js"
+compatibility_date = "2025-12-01"
+workers_dev = true
+
+routes = [
+  { pattern = "updates.rpulse.top", custom_domain = true }
+]
+
+[[kv_namespaces]]
+binding = "ATRIUM_RELEASES_KV"
+id = "39857097b85946fa8141e94b44cb00b9"

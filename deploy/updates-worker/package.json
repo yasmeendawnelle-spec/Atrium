@@ -1,0 +1,7 @@
+{
+  "name": "atrium-updates-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Cloudflare Worker update feed for Atrium Windows installer artifacts"
+}
