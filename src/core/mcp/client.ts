@@ -75,6 +75,7 @@ export class McpClient {
   private resources: McpResourceInfo[] = []
   private prompts: McpPromptInfo[] = []
   private connecting: Promise<void> | null = null
+  private openAbort: AbortController | null = null
   readonly status: McpServerStatus
   readonly config: McpServerConfig
   private readonly onToolsChanged: (client: McpClient) => void
@@ -105,20 +106,32 @@ export class McpClient {
 
   private async open(): Promise<void> {
     await this.close()
+    const openController = new AbortController()
+    this.openAbort = openController
     this.stderr = ''
     this.status.state = 'connecting'
     this.status.error = undefined
     this.status.needsAuth = false
     const resolved = await resolveSecrets(this.config)
+    if (openController.signal.aborted) return
     // A failed spawn surfaces only on the transport; `connect` itself just
     // reports "Connection closed". Keep the first real error to explain it.
     let transportError: unknown
     let interactiveAuthNeeded = false
     try {
       const client = new Client({ name: 'atrium', version: '0.1.0' })
-      const transport = await this.makeTransport(resolved, () => {
-        interactiveAuthNeeded = true
-      })
+      const transport = await this.makeTransport(
+        resolved,
+        () => {
+          interactiveAuthNeeded = true
+        },
+        openController.signal,
+      )
+      if (openController.signal.aborted) {
+        await transport.close().catch(() => undefined)
+        return
+      }
+      this.transport = transport
       transport.onerror = (err) => {
         transportError ??= err
       }
@@ -132,14 +145,19 @@ export class McpClient {
         void this.refreshPrompts()
       })
       await client.connect(transport)
+      if (openController.signal.aborted) {
+        await client.close().catch(() => undefined)
+        return
+      }
       this.client = client
-      this.transport = transport
       await this.refreshTools()
       await Promise.allSettled([this.refreshResources(), this.refreshPrompts()])
       this.status.state = 'connected'
       this.status.needsAuth = false
     } catch (err) {
+      const aborted = openController.signal.aborted
       await this.close()
+      if (aborted) return
       this.status.state = 'error'
       const rootErr = transportError ?? err
       const needsAuth = interactiveAuthNeeded || isUnauthorizedMcpError(rootErr) || isUnauthorizedMcpError(err)
@@ -148,10 +166,18 @@ export class McpClient {
         ? 'OAuth sign-in is required before this server can connect.'
         : spawnHint(rootErr, this.config, this.stderr)
       this.status.stderrTail = this.stderr || undefined
+    } finally {
+      if (this.openAbort === openController) {
+        this.openAbort = null
+      }
     }
   }
 
-  private async makeTransport(resolved: ResolvedServer, onInteractiveAuthNeeded: () => void) {
+  private async makeTransport(
+    resolved: ResolvedServer,
+    onInteractiveAuthNeeded: () => void,
+    signal?: AbortSignal,
+  ) {
     if (this.config.transport === 'stdio') {
       const transport = new StdioClientTransport({
         command: this.config.command ?? '',
@@ -172,7 +198,7 @@ export class McpClient {
     const requestInit: RequestInit = { headers: resolved.headers }
     const hasOAuth = this.config.authMode === 'oauth' || (await hasStoredOAuthBundle(this.config.id))
     const authProvider = createBackgroundOAuthProvider(this.config, onInteractiveAuthNeeded)
-    const probe = await probeStreamableHttp(url, resolved.headers)
+    const probe = await probeStreamableHttp(url, resolved.headers, signal)
     if (probe.streamable || hasOAuth || probe.unauthorized) {
       return new StreamableHTTPClientTransport(url, {
         requestInit,
@@ -313,7 +339,10 @@ export class McpClient {
   }
 
   async close(): Promise<void> {
+    this.openAbort?.abort()
+    this.openAbort = null
     const client = this.client
+    const transport = this.transport
     this.client = null
     this.transport = null
     this.tools = []
@@ -325,6 +354,12 @@ export class McpClient {
     if (client) {
       try {
         await client.close()
+      } catch {
+        /* already gone */
+      }
+    } else if (transport) {
+      try {
+        await transport.close()
       } catch {
         /* already gone */
       }
@@ -340,9 +375,14 @@ export class McpClient {
 async function probeStreamableHttp(
   url: URL,
   headers: Record<string, string>,
+  outerSignal?: AbortSignal,
 ): Promise<{ streamable: boolean; unauthorized: boolean }> {
   const controller = new AbortController()
+  const onOuterAbort = () => controller.abort()
+  if (outerSignal?.aborted) return { streamable: false, unauthorized: false }
+  outerSignal?.addEventListener('abort', onOuterAbort, { once: true })
   const timer = setTimeout(() => controller.abort(), 8000)
+  timer.unref?.()
   try {
     const res = await netFetch(url, {
       method: 'POST',
@@ -367,6 +407,7 @@ async function probeStreamableHttp(
   } catch {
     return { streamable: false, unauthorized: false }
   } finally {
+    outerSignal?.removeEventListener('abort', onOuterAbort)
     clearTimeout(timer)
   }
 }

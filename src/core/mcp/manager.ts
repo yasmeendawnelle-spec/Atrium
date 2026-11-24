@@ -44,8 +44,9 @@ export class McpManager {
     return join(this.dir, 'mcp-servers.json')
   }
 
-  async load(): Promise<void> {
+  async load(opts?: { connect?: boolean }): Promise<void> {
     this.configs = await readJson(this.path(), [] as McpServerConfig[])
+    if (opts?.connect === false) return
     for (const config of this.configs) if (config.enabled) void this.connect(config)
   }
 
@@ -128,15 +129,20 @@ export class McpManager {
     return client.callTool(found.tool.name, args, signal)
   }
 
-  async save(draft: Omit<McpServerConfig, 'id'> & { id?: string }): Promise<McpServerConfig> {
+  async save(
+    draft: Omit<McpServerConfig, 'id'> & { id?: string },
+    opts?: { connect?: boolean },
+  ): Promise<McpServerConfig> {
     const id = draft.id && this.configs.some((c) => c.id === draft.id) ? draft.id : newId('mcp')
     const existing = this.configs.find((c) => c.id === id)
     const config: McpServerConfig = { ...draft, id, enabled: draft.enabled ?? existing?.enabled ?? true }
     await this.storeSecrets(config)
     this.configs = [...this.configs.filter((c) => c.id !== id), config]
     await writeJson(this.path(), this.configs)
-    if (config.enabled) void this.connect(config)
-    else await this.disconnect(id)
+    if (opts?.connect !== false) {
+      if (config.enabled) void this.connect(config)
+      else await this.disconnect(id)
+    }
     return redact(config)
   }
 

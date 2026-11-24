@@ -786,6 +786,10 @@ export interface UsageSummary {
   untaggedSceneMessages: number
 }
 
+export type CliThemeId = 'warm-studio' | 'claude' | 'codex' | 'agy' | 'minimal'
+
+export const CLI_THEME_IDS: readonly CliThemeId[] = ['warm-studio', 'claude', 'codex', 'agy', 'minimal']
+
 export interface AppSettings {
   locale: 'system' | 'zh' | 'en'
   theme: 'system' | 'light' | 'dark'
@@ -852,6 +856,8 @@ export interface AppSettings {
   enablePluginHooks?: boolean
   /** Custom context window limit in tokens (0 or undefined = auto-detect from active model). */
   contextWindowTokens?: number
+  /** Active CLI color theme identifier. */
+  cliTheme?: CliThemeId
 }
 
 export const CONTEXT_WINDOW_PRESETS = [0, 64_000, 128_000, 200_000, 256_000, 400_000, 1_000_000] as const
