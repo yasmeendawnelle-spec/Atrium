@@ -1,0 +1,103 @@
+name: Atrium CLI Cross-Platform Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional existing release tag to attach built binaries (e.g. v0.3.4)
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build CLI (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: atrium-linux-x64
+            artifact: atrium-cli-linux-x64
+            extra_files: dist-cli/atrium.cjs
+          - os: macos-latest
+            bin: atrium-darwin-arm64
+            artifact: atrium-cli-darwin-arm64
+            extra_files: ''
+          - os: macos-15-intel
+            bin: atrium-darwin-x64
+            artifact: atrium-cli-darwin-x64
+            extra_files: ''
+          - os: windows-latest
+            bin: atrium-win32-x64.exe
+            artifact: atrium-cli-win32-x64
+            extra_files: ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Typecheck Node and CLI
+        run: npm run typecheck:node
+
+      - name: Build single-file CJS CLI bundle
+        run: npm run build:cli
+
+      - name: Run CLI unit tests
+        run: node --test --test-timeout=30000 --experimental-strip-types test/cli.test.ts
+
+      - name: Build native SEA executable
+        run: npm run build:cli:bin -- --out "dist-cli/${{ matrix.bin }}"
+
+      - name: Smoke test CLI bundle and binary
+        shell: bash
+        run: |
+          node dist-cli/atrium.cjs --version
+          node dist-cli/atrium.cjs --help > /dev/null
+          ./dist-cli/${{ matrix.bin }} --version
+          ./dist-cli/${{ matrix.bin }} --help > /dev/null
+          ./dist-cli/${{ matrix.bin }} doctor --json
+
+      - name: Validate installer scripts
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            bash -n scripts/install.sh
+          fi
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            powershell.exe -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/install.ps1", [ref]$null, [ref]$errors); if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }'
+          fi
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist-cli/${{ matrix.bin }}
+            dist-cli/atrium.cjs
+
+      - name: Attach binary to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          files: |
+            dist-cli/${{ matrix.bin }}
+            ${{ matrix.extra_files }}

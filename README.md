@@ -101,6 +101,45 @@ npm run dist:installer
 
 ---
 
+## Cross-Platform CLI (`Windows / macOS / Linux`)
+
+Atrium also ships a standalone terminal CLI (`src/cli/`) that launches directly as **`atrium`** from any directory — reusing the full agent engine, AES-256-GCM secret storage, MCP tools, skills, and checkpoints across Windows, macOS, and headless Linux SSH environments:
+
+### Global Install & Direct Launch
+
+```powershell
+# Windows (PowerShell) — installs atrium.exe into %USERPROFILE%\.local\bin and updates PATH
+irm https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/scripts/install.ps1 | iex
+```
+
+```bash
+# macOS / Linux — installs atrium into ~/.local/bin and updates shell PATH
+curl -fsSL https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/scripts/install.sh | sh
+
+# Or build & install the native SEA binary directly from a local clone
+npm run cli:install
+```
+
+Once installed, type **`atrium`** in any terminal:
+
+```bash
+atrium                                 # Interactive chat (includes first-run setup wizard)
+atrium doctor                          # Inspect runtime, provider, Git, and MCP health
+atrium login                           # Sign in with Atrium Account (Email / Google / GitHub)
+git diff | atrium -p "Review changes"  # One-shot piped prompt execution (--json / -y supported)
+```
+
+### Development & Packaging Commands
+
+```bash
+npm run cli -- --help                  # Run CLI directly from TypeScript source
+npm run build:cli                      # Build dist-cli/atrium.cjs & sync packages/cli/bin/
+npm run build:cli:bin                  # Compile standalone native SEA binary for current OS
+npm run cli:uninstall                  # Remove local ~/.local/bin/atrium binary
+```
+
+---
+
 ## Project Structure
 
 ```text
@@ -108,11 +147,14 @@ atrium/
 ├── src/
 │   ├── main/        # Electron main process, browser manager, quick entry, desktop driver, auto-updater
 │   ├── core/        # Isolated core engine (agent loop, providers/, tools/, mcp/, knowledge, plugins, PTY)
+│   ├── cli/         # Headless cross-platform CLI (REPL, encrypted secrets, OAuth/email login, doctor, one-shot/NDJSON)
 │   ├── preload/     # Context-isolated preload bridge
 │   ├── renderer/    # React + Vite frontend views, components, locales & design tokens
 │   └── shared/      # Shared TypeScript types, presets, IPC contracts & cloud helpers
+├── packages/
+│   └── cli/         # Standalone zero-dependency @atrium-ai/cli package definition (bin: atrium)
 ├── test/            # Node native unit test suite
-├── scripts/         # Artifact runtime bundler & release helper scripts
+├── scripts/         # Artifact runtime, CLI CJS/SEA builders, install.sh / install.ps1 & release scripts
 ├── deploy/          # Generic Cloudflare Worker update server setup
 ├── docs/            # Design system notes
 └── build/           # Application icons & brand SVG assets

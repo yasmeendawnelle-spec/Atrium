@@ -1,0 +1,24 @@
+{
+  "name": "@atrium-ai/cli",
+  "version": "0.3.4",
+  "description": "Atrium CLI — Cross-platform AI Agent Workbench (Windows / macOS / Linux)",
+  "license": "MIT",
+  "bin": {
+    "atrium": "./bin/atrium.cjs"
+  },
+  "files": [
+    "bin/atrium.cjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {},
+  "scripts": {
+    "prepack": "node ../../scripts/build-cli.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasmeendawnelle-spec/Atrium.git"
+  }
+}

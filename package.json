@@ -4,11 +4,19 @@
   "version": "0.3.4",
   "description": "A beginner-friendly desktop AI agent with visual MCP setup and a built-in marketplace.",
   "main": "./out/main/index.js",
+  "bin": {
+    "atrium": "./dist-cli/atrium.cjs"
+  },
   "author": "Atrium",
   "license": "MIT",
   "private": true,
   "scripts": {
     "runtime:artifacts": "node scripts/build-artifact-runtime.mjs",
+    "cli": "node --experimental-strip-types src/cli/index.ts",
+    "cli:install": "node scripts/install-local-cli.mjs",
+    "cli:uninstall": "node scripts/install-local-cli.mjs --uninstall",
+    "build:cli": "node scripts/build-cli.mjs",
+    "build:cli:bin": "node scripts/build-cli-binary.mjs",
     "dev": "npm run runtime:artifacts && electron-vite dev",
     "build": "npm run runtime:artifacts && electron-vite build",
     "preview": "electron-vite preview",

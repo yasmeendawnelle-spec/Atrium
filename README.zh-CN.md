@@ -101,6 +101,45 @@ npm run dist:installer
 
 ---
 
+## 跨平台命令行 CLI（`Windows / macOS / Linux`）
+
+Atrium 提供可全局安装并直接运行的独立终端 CLI（`src/cli/`），安装后在任意目录输入 **`atrium`** 即可启动 —— 完整复用 Agent 核心引擎、AES-256-GCM 加密密钥存储、MCP 工具、Skills 与检查点回退能力，兼容 Windows、macOS 及无桌面环境的 Linux SSH 终端：
+
+### 一键全局安装与直接启动
+
+```powershell
+# Windows (PowerShell) — 安装独立 atrium.exe 到 %USERPROFILE%\.local\bin 并自动配置 PATH
+irm https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/scripts/install.ps1 | iex
+```
+
+```bash
+# macOS / Linux — 安装独立 atrium 到 ~/.local/bin 并自动配置 Shell PATH
+curl -fsSL https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/scripts/install.sh | sh
+
+# 或直接从本地仓库编译原生独立可执行文件并全局安装
+npm run cli:install
+```
+
+安装完成后，在任意终端直接输入 **`atrium`**：
+
+```bash
+atrium                                 # 启动交互式对话（首次启动自带引导配置向导）
+atrium doctor                          # 检查运行环境、模型配置、Git 与 MCP 健康状态
+atrium login                           # 登录 Atrium 账号（邮箱 / Google / GitHub）
+git diff | atrium -p "审查这些改动"    # 单次管道输入执行（支持 --json / -y 参数）
+```
+
+### 开发调试与本地构建命令
+
+```bash
+npm run cli -- --help                  # 直接通过 TypeScript 源码运行 CLI
+npm run build:cli                      # 构建 dist-cli/atrium.cjs 并同步到 packages/cli/bin/
+npm run build:cli:bin                  # 基于 Node SEA 编译当前系统的原生独立可执行文件
+npm run cli:uninstall                  # 卸载本地 ~/.local/bin/atrium
+```
+
+---
+
 ## 目录结构
 
 ```text
@@ -108,11 +147,14 @@ atrium/
 ├── src/
 │   ├── main/        # Electron 主进程、内置浏览器管理、快捷悬浮窗、桌面驱动与热更新
 │   ├── core/        # 独立核心引擎（Agent 循环、模型驱动、工具集、MCP、知识库、插件、PTY）
+│   ├── cli/         # 跨平台无头命令行 CLI（交互 REPL、加密密钥存储、OAuth/邮箱登录、doctor 与单次模式）
 │   ├── preload/     # 上下文隔离预加载桥接层
 │   ├── renderer/    # React + Vite 前端视图、组件、双语文案与视觉 Token
 │   └── shared/      # 双端共享 TypeScript 类型、预置、IPC 契约与云端辅助方法
+├── packages/
+│   └── cli/         # 独立的零外部依赖 @atrium-ai/cli 包定义（bin: atrium）
 ├── test/            # Node 原生单元测试集
-├── scripts/         # 离线 Artifact 运行时打包与版本发布脚本
+├── scripts/         # Artifact 运行时、CLI CJS/SEA 打包、install.sh / install.ps1 与发布脚本
 ├── deploy/          # Cloudflare Worker 通用更新分发服务端
 ├── docs/            # 设计规范说明文档
 └── build/           # 应用图标与品牌 SVG 资源
