@@ -21,6 +21,43 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   artifactName: ${productName}-Setup-${version}.${ext}
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  extendInfo:
+    NSMicrophoneUsageDescription: Atrium uses microphone access when you trigger voice dictation.
+    NSAppleEventsUsageDescription: Atrium uses Apple Events when you explicitly enable OS desktop control.
+    NSScreenCaptureUsageDescription: Atrium captures screen content for Spotlight Quick Entry and Computer Use tools.
+dmg:
+  title: Atrium ${version}
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: build/icon.png
+  category: Development
+  maintainer: Atrium <noreply@atrium.dev>
+  desktop:
+    entry:
+      Name: Atrium
+      StartupWMClass: atrium
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
 # Live Cloudflare Worker update feed (served via deployed atrium-updates Worker).
 publish:
   provider: generic

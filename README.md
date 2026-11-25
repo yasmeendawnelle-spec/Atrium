@@ -29,13 +29,14 @@
 
 ## Download & Install (Releases)
 
-Looking for the Windows desktop installer without building from source?
+Looking for ready-to-run desktop installers for **Windows**, **macOS**, or **Linux** without building from source?
 
 - **Latest Version**: **[Download Latest Release (GitHub Releases)](https://github.com/yasmeendawnelle-spec/Atrium/releases/latest)**
 - **All Versions**: **[Browse All Releases](https://github.com/yasmeendawnelle-spec/Atrium/releases)**
-  - Open a release, expand **Assets** at the bottom, and download `Atrium-Setup-<version>.exe`.
-  - Built-in auto-updater is included (`v0.2.0` and above can automatically check for and install newer updates inside the app).
-  - **Windows SmartScreen Note**: Release builds are currently unsigned (`signExecutable: false`). If Windows shows *"Windows protected your PC"*, click **More info -> Run anyway**.
+  - **Windows (`x64`)**: Download `Atrium-Setup-<version>.exe`. (Unsigned build: if SmartScreen shows *"Windows protected your PC"*, click **More info -> Run anyway**.)
+  - **macOS (`Apple Silicon arm64` / `Intel x64`)**: Download `Atrium-<version>-mac-arm64.dmg` or `Atrium-<version>-mac-x64.dmg` (or `.zip`). Drag `Atrium.app` to Applications; since builds are ad-hoc signed without Apple notarization, run `xattr -cr /Applications/Atrium.app` (or right-click **Open**) on first launch.
+  - **Linux (`x64`)**: Download `Atrium-<version>-linux-x64.AppImage` (make executable with `chmod +x` and run) or `Atrium-<version>-linux-amd64.deb` (`sudo apt install ./Atrium-*.deb`). For optional OS desktop automation tools on X11, install `xdotool`.
+  - Built-in Windows auto-updater is included (`v0.2.0` and above can check for and install newer updates inside the app).
 
 > **Account & BYOK Note**: Because this is the official Atrium client, signing in with an Atrium account (via Google, GitHub, or email registration/password) is required before opening the main workbench. Once signed in, you can use built-in Atrium Cloud models or add your own custom API keys (BYOK) and local Ollama endpoints anytime.
 
@@ -75,7 +76,7 @@ Looking for the Windows desktop installer without building from source?
 
 - **Node.js** >= 22 (uses `--experimental-strip-types` to run TypeScript tests directly)
 - **npm** >= 10
-- **OS**: Windows (primary packaged target; renderer and shared core follow cross-platform Electron patterns)
+- **OS**: Windows, macOS, or Linux
 
 ### Commands
 
@@ -95,8 +96,10 @@ npm test
 # 5. Build production bundle (out/)
 npm run build
 
-# 6. Package Windows NSIS installer
-npm run dist:installer
+# 6. Package Desktop installers per OS
+npm run dist:installer   # Windows NSIS (.exe)
+npm run dist:mac         # macOS (.dmg / .zip for arm64 + x64)
+npm run dist:linux       # Linux (.AppImage / .deb for x64)
 ```
 
 ---

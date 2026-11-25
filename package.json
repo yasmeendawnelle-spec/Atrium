@@ -12,6 +12,7 @@
   "private": true,
   "scripts": {
     "runtime:artifacts": "node scripts/build-artifact-runtime.mjs",
+    "build:icons": "node scripts/build-icons.mjs",
     "cli": "node --experimental-strip-types src/cli/index.ts",
     "cli:install": "node scripts/install-local-cli.mjs",
     "cli:uninstall": "node scripts/install-local-cli.mjs --uninstall",
@@ -26,6 +27,8 @@
     "test": "node --test --test-timeout=60000 --experimental-strip-types \"test/**/*.test.ts\"",
     "dist": "npm run build && electron-builder --win --dir",
     "dist:installer": "npm run build && electron-builder --win nsis --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb --publish never",
     "release:publish": "node scripts/publish-release.mjs"
   },
   "dependencies": {

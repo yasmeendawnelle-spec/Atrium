@@ -29,13 +29,14 @@
 
 ## 下载与安装（Releases）
 
-如果不想从源码构建，可以直接下载打包好的 Windows 安装包：
+如果不想从源码构建，可以直接下载对应系统的桌面安装包（支持 **Windows / macOS / Linux**）：
 
 - **下载最新版本**：👉 **[前往 Releases 最新版本页](https://github.com/yasmeendawnelle-spec/Atrium/releases/latest)**
 - **查看全部历史版本**：**[All Releases](https://github.com/yasmeendawnelle-spec/Atrium/releases)**
-  - 打开版本页面后，展开底部的 **`Assets`** 折叠栏，下载 **`Atrium-Setup-<版本号>.exe`** 即可安装；
-  - 从 `v0.2.0` 起已内置自动更新检测，安装后可在应用内检查并自动升级到最新版；
-  - **Windows SmartScreen 安全提示说明**：目前发布包暂未购买商业代码签名证书（`signExecutable: false`），首次运行如遇「Windows 已保护你的电脑」拦截提示，点击 **「更多信息 → 仍要运行」** 即可。
+  - **Windows（`x64`）**：下载 `Atrium-Setup-<版本号>.exe` 安装运行（暂未购买商业签名证书，`signExecutable: false`，若 SmartScreen 拦截请点击 **「更多信息 → 仍要运行」**）。
+  - **macOS（`Apple Silicon arm64` / `Intel x64`）**：下载 `Atrium-<版本号>-mac-arm64.dmg` 或 `Atrium-<版本号>-mac-x64.dmg`（亦提供 `.zip`），拖入应用程序后因暂未公证，如遇提示请执行 `xattr -cr /Applications/Atrium.app` 或右键「打开」。
+  - **Linux（`x64`）**：下载 `Atrium-<版本号>-linux-x64.AppImage`（赋予 `chmod +x` 权限后运行）或 `Atrium-<版本号>-linux-amd64.deb`（`sudo apt install ./Atrium-*.deb`）。在 X11 下如需启用全桌面键鼠操控，可选安装 `xdotool`。
+  - Windows 版从 `v0.2.0` 起内置自动更新检测，可在应用内检查并自动升级到最新版。
 
 > **关于账号与模型接入说明**：本仓库为 Atrium 官方客户端源码。使用桌面端前需先在应用内登录 **Atrium 官方账号**（支持 Google / GitHub 授权或受支持的邮箱注册与密码登录）；登录后既可直接使用云端聚合模型与订阅额度，也可随时添加自有 API Key（BYOK）或本地 Ollama 服务。
 
@@ -75,7 +76,7 @@
 
 - **Node.js** >= 22（测试命令通过 `--experimental-strip-types` 直接运行 TypeScript）
 - **npm** >= 10
-- **操作系统**：Windows（主要打包目标；渲染层与核心引擎遵循跨平台 Electron 结构）
+- **操作系统**：Windows / macOS / Linux 全平台支持
 
 ### 常用命令
 
@@ -95,8 +96,10 @@ npm test
 # 5. 构建生产产物 (out/)
 npm run build
 
-# 6. 打包 Windows NSIS 安装包
-npm run dist:installer
+# 6. 按平台打包桌面安装器
+npm run dist:installer   # Windows NSIS 安装包 (.exe)
+npm run dist:mac         # macOS 安装包 (.dmg / .zip，含 arm64 + x64)
+npm run dist:linux       # Linux 安装包 (.AppImage / .deb)
 ```
 
 ---
