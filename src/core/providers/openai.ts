@@ -46,7 +46,7 @@ export function buildOpenAiBody(endpoint: ProviderEndpoint, req: ChatRequest, ri
   body.stream_options = { include_usage: true }
   if (
     supportsDeepSeekThinking(endpoint.baseUrl, req.model) &&
-    (req.effort === 'medium' || req.effort === 'high' || req.effort === 'xhigh')
+    (req.effort === 'medium' || req.effort === 'high' || req.effort === 'xhigh' || req.effort === 'max')
   ) {
     body.thinking = { type: 'enabled' }
   }

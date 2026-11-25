@@ -29,19 +29,29 @@ export const RUN_SUBAGENT_TOOL: ToolInfo = {
   },
 }
 
+export const ULTRACODE_SUBAGENT_MAX_ROUNDS = 30
+
 export interface ParsedSubagentTask {
   role: SubagentRole
   task: string
   maxRounds: number
 }
 
-export function parseSubagentInput(input: Record<string, unknown>, parentMode: AgentMode): ParsedSubagentTask {
+export function parseSubagentInput(
+  input: Record<string, unknown>,
+  parentMode: AgentMode,
+  opts?: { ultracode?: boolean },
+): ParsedSubagentTask {
   const requestedRole = input.role === 'worker' ? 'worker' : 'explorer'
   // Plan mode must never escalate privileges through a subagent.
   const role: SubagentRole = parentMode === 'plan' ? 'explorer' : requestedRole
   const task = typeof input.task === 'string' ? input.task.trim() : ''
-  const rawMax = typeof input.max_rounds === 'number' && Number.isFinite(input.max_rounds) ? Math.floor(input.max_rounds) : 10
-  const maxRounds = Math.max(1, Math.min(20, rawMax))
+  // Ultracode workflows hand each subagent a larger piece, so they get a higher ceiling.
+  const cap = opts?.ultracode ? ULTRACODE_SUBAGENT_MAX_ROUNDS : 20
+  const fallback = opts?.ultracode ? 15 : 10
+  const rawMax =
+    typeof input.max_rounds === 'number' && Number.isFinite(input.max_rounds) ? Math.floor(input.max_rounds) : fallback
+  const maxRounds = Math.max(1, Math.min(cap, rawMax))
   return { role, task, maxRounds }
 }
 

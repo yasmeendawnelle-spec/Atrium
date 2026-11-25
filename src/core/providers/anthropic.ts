@@ -3,7 +3,7 @@
 // Anthropic-compatible proxies (cc-switch and friends), all through the
 // proxy-aware fetch. The official SDK is a better fit for first-party-only apps.
 import type { Message, ThinkingBlock, TokenUsage, ToolCall } from '../../shared/types.ts'
-import { buildAnthropicThinking } from '../../shared/thinking.ts'
+import { buildAnthropicThinking, capEffort, isEffortRejection, lowerEffort, type WireEffort } from '../../shared/thinking.ts'
 import { netFetch } from '../net.ts'
 import { readSse } from './sse.ts'
 import {
@@ -133,7 +133,12 @@ interface OpenBlock {
   data: string
 }
 
-function buildBody(endpoint: ProviderEndpoint, req: ChatRequest, rich: boolean): Record<string, unknown> {
+function buildBody(
+  endpoint: ProviderEndpoint,
+  req: ChatRequest,
+  rich: boolean,
+  effortCap?: WireEffort,
+): Record<string, unknown> {
   const maxTokens = req.maxTokens ?? 64_000
   const body: Record<string, unknown> = {
     model: req.model,
@@ -154,34 +159,56 @@ function buildBody(endpoint: ProviderEndpoint, req: ChatRequest, rich: boolean):
   if (rich && endpoint.anthropicDirect) {
     const { thinking, outputConfig } = buildAnthropicThinking(req.model, maxTokens, req.effort)
     if (thinking) body.thinking = thinking
-    if (outputConfig) body.output_config = outputConfig
+    if (outputConfig) {
+      const effort = outputConfig.effort as WireEffort | undefined
+      body.output_config = effort ? { ...outputConfig, effort: capEffort(effort, effortCap) } : outputConfig
+    }
   }
   return body
 }
 
 /** Remembers endpoints/models that rejected rich Anthropic fields so subsequent rounds skip the 400/422 probe. */
 const plainFallbackHosts = new Set<string>()
+/** Highest effort level each host+model accepted after a higher level was rejected. */
+const effortCaps = new Map<string, WireEffort>()
 
 export const anthropicAdapter: ProviderAdapter = {
   async chat(endpoint: ProviderEndpoint, req: ChatRequest, handlers: StreamHandlers): Promise<ChatResult> {
     const url = messagesUrl(endpoint.baseUrl, 'messages')
     const cacheKey = `${endpoint.baseUrl}::${req.model}`
     const wantRich = Boolean(endpoint.anthropicDirect) && (req.maxTokens ?? 64_000) > 64 && !plainFallbackHosts.has(cacheKey)
-    let res = await netFetch(url, {
-      method: 'POST',
-      headers: headers(endpoint),
-      body: JSON.stringify(buildBody(endpoint, req, wantRich)),
-      signal: req.signal,
-    })
+    const post = (body: Record<string, unknown>) =>
+      netFetch(url, { method: 'POST', headers: headers(endpoint), body: JSON.stringify(body), signal: req.signal })
+    let body = buildBody(endpoint, req, wantRich, effortCaps.get(cacheKey))
+    let res = await post(body)
     // Some third-party Anthropic proxies forward unknown fields verbatim and 400/422 on
     // cache_control/output_config/thinking. Fall back once and cache per host+model.
     if (wantRich && (res.status === 400 || res.status === 422)) {
-      const errText = await res.text().catch(() => '')
+      let errText = await res.text().catch(() => '')
       const isContextOverflow =
         /context[_ ]?length|maximum context|too many tokens|prompt is too long|exceeds.*(?:context|limit)|reduce the length/i.test(errText)
       if (isContextOverflow) {
         throw await httpError(new Response(errText, { status: res.status, headers: res.headers }), 'The model API')
       }
+      // A model that rejects only the effort level steps down (max -> xhigh -> high) and keeps
+      // caching and thinking, instead of dropping every rich field for this host+model.
+      let sent = (body.output_config as { effort?: WireEffort } | undefined)?.effort
+      let lower = sent ? lowerEffort(sent) : undefined
+      while (lower && isEffortRejection(errText)) {
+        body = buildBody(endpoint, req, true, lower)
+        res = await post(body)
+        if (res.ok) {
+          if (effortCaps.size > 200) effortCaps.clear()
+          effortCaps.set(cacheKey, lower)
+          break
+        }
+        if (res.status !== 400 && res.status !== 422) break
+        errText = await res.text().catch(() => '')
+        sent = lower
+        lower = lowerEffort(sent)
+      }
+    }
+    if (wantRich && (res.status === 400 || res.status === 422)) {
       if (plainFallbackHosts.size > 200) plainFallbackHosts.clear()
       plainFallbackHosts.add(cacheKey)
       res = await netFetch(url, {

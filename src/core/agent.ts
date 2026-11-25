@@ -56,6 +56,7 @@ import type { TerminalManager } from './terminal.ts'
 import { HookEngine, loadWorkspaceHookSource, type HookRunEventNotice, type PluginHookSource } from './hooks.ts'
 
 const MAX_ROUNDS = 40
+const ULTRACODE_MIN_ROUNDS = 60
 const OUTPUT_LIMIT = 30_000
 const READ_ONLY_FILE_TOOLS = new Set(['list_dir', 'read_file', 'search'])
 const READ_ONLY_WEB_TOOLS = new Set(['web_search', 'web_fetch'])
@@ -223,6 +224,7 @@ export interface LoopDeps {
       computerUse?: boolean
       browserComputerUse?: boolean
       desktopControl?: boolean
+      ultracode?: boolean
     },
   ) => string
   allowSubagents?: boolean
@@ -556,9 +558,12 @@ export class AgentLoop {
     const browserComputerUse = Boolean(this.deps.browser && cuEnabled)
     const desktopControl = Boolean(this.deps.computer && cuEnabled && this.isDesktopControlAllowed())
     const computerUse = browserComputerUse || desktopControl
+    // Subagents run with allowSubagents=false, so Ultracode only ever drives the top-level agent.
+    const ultracode = this.isUltracodeActive()
     const system = this.deps.systemPrompt(workspace, projectNotes || undefined, {
       mode,
       workScene,
+      ultracode,
       skillsSummary: skillsSummary || undefined,
       pluginRules: pluginRules || undefined,
       memoryPrompt,
@@ -596,7 +601,9 @@ export class AgentLoop {
       typeof appSettings.maxAgentRounds === 'number' && Number.isFinite(appSettings.maxAgentRounds)
         ? Math.max(10, Math.min(100, Math.floor(appSettings.maxAgentRounds)))
         : MAX_ROUNDS
-    const maxRounds = this.deps.maxRounds ?? configuredRounds
+    // An Ultracode turn spends rounds on planning, dispatching and verifying, so it gets a higher floor.
+    const maxRounds =
+      this.deps.maxRounds ?? (ultracode ? Math.max(configuredRounds, ULTRACODE_MIN_ROUNDS) : configuredRounds)
     let stopHookContinuations = 0
     for (let round = 0; round < maxRounds; round++) {
       if (signal.aborted) {
@@ -1316,6 +1323,10 @@ export class AgentLoop {
     }
   }
 
+  private isUltracodeActive(): boolean {
+    return this.deps.settings.get().ultracode === true && this.deps.allowSubagents !== false
+  }
+
   private async executeSubagent(
     parentConversation: Conversation,
     parentCall: ToolCall,
@@ -1327,7 +1338,9 @@ export class AgentLoop {
     if (this.deps.allowSubagents === false) {
       return { output: 'Nested subagent calls are disabled.', isError: true }
     }
-    const { role, task, maxRounds } = parseSubagentInput(parentCall.input, parentMode)
+    const { role, task, maxRounds } = parseSubagentInput(parentCall.input, parentMode, {
+      ultracode: this.isUltracodeActive(),
+    })
     if (!task) return { output: 'Subagent `task` is required.', isError: true }
     if (signal.aborted) return { output: 'Stopped.', isError: true }
 

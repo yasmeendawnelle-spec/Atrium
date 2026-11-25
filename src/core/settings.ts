@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import {
   normalizeAgentMode,
   normalizeContextWindowTokens,
+  normalizeReasoningEffort,
   type AppSettings,
   type ProviderConfig,
   type ProviderDraft,
@@ -45,6 +46,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoExtractMemory: true,
   enablePluginHooks: false,
   contextWindowTokens: 0,
+  reasoningEffort: 'auto',
+  ultracode: false,
 }
 
 interface ProviderRecord extends Omit<ProviderConfig, 'hasKey'> {
@@ -103,6 +106,8 @@ export class SettingsStore {
       lastExecMode: safeLastExec,
       workScene: saved.workScene === 'work' ? 'work' : 'code',
       maxAgentRounds: rawRounds,
+      reasoningEffort: normalizeReasoningEffort(saved.reasoningEffort),
+      ultracode: saved.ultracode === true,
       ...(saved.browserMode === 'edge' || saved.browserMode === 'google' ? { browserMode: saved.browserMode } : { browserMode: undefined }),
     }
     const desktopControl =
@@ -194,6 +199,12 @@ export class SettingsStore {
     }
     if (patch.contextWindowTokens !== undefined) {
       next.contextWindowTokens = normalizeContextWindowTokens(patch.contextWindowTokens)
+    }
+    if (patch.reasoningEffort !== undefined) {
+      next.reasoningEffort = normalizeReasoningEffort(patch.reasoningEffort, this.settings.reasoningEffort ?? 'auto')
+    }
+    if (patch.ultracode !== undefined) {
+      next.ultracode = patch.ultracode === true
     }
     if (patch.transcriptWidth !== undefined) {
       next.transcriptWidth =

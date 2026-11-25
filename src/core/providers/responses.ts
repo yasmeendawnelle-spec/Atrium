@@ -4,7 +4,14 @@
 // streamed reasoning summaries, function_call / function_call_output items,
 // and automatic minimal-body fallback for compatible third-party proxies.
 import type { ImageAttachment, Message, ResponsesReasoning, TokenUsage, ToolCall } from '../../shared/types.ts'
-import { supportsResponsesReasoning } from '../../shared/thinking.ts'
+import {
+  capEffort,
+  isEffortRejection,
+  lowerEffort,
+  responsesEffort,
+  supportsResponsesReasoning,
+  type WireEffort,
+} from '../../shared/thinking.ts'
 import { netFetch } from '../net.ts'
 import { readSse } from './sse.ts'
 import {
@@ -110,7 +117,7 @@ export function toResponsesInput(messages: Message[]): Record<string, unknown>[]
   return out
 }
 
-function buildBody(req: ChatRequest, rich: boolean): Record<string, unknown> {
+function buildBody(req: ChatRequest, rich: boolean, effortCap?: WireEffort): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model,
     input: toResponsesInput(req.messages),
@@ -132,7 +139,7 @@ function buildBody(req: ChatRequest, rich: boolean): Record<string, unknown> {
     if (req.cacheKey) body.prompt_cache_key = req.cacheKey
     if (supportsResponsesReasoning(req.model) && (req.maxTokens ?? 1024) > 64) {
       body.reasoning = {
-        effort: req.effort && req.effort !== 'auto' ? req.effort : 'medium',
+        effort: capEffort(responsesEffort(req.model, req.effort), effortCap),
         summary: 'auto',
       }
     }
@@ -162,21 +169,40 @@ function summaryTextFromItem(item: Record<string, any>): string {
 }
 
 const plainFallbackHosts = new Set<string>()
+/** Highest effort level each host+model accepted after a higher level was rejected. */
+const effortCaps = new Map<string, WireEffort>()
 
 export const responsesAdapter: ProviderAdapter = {
   async chat(endpoint: ProviderEndpoint, req: ChatRequest, handlers: StreamHandlers): Promise<ChatResult> {
     const url = responsesUrl(endpoint.baseUrl, 'responses')
     const hostKey = `${endpoint.baseUrl}::${req.model}`
     const wantRich = (req.maxTokens ?? 1024) > 64 && !plainFallbackHosts.has(hostKey)
-    let res = await netFetch(url, {
-      method: 'POST',
-      headers: headers(endpoint),
-      body: JSON.stringify(buildBody(req, wantRich)),
-      signal: req.signal,
-    })
+    const post = (body: Record<string, unknown>) =>
+      netFetch(url, { method: 'POST', headers: headers(endpoint), body: JSON.stringify(body), signal: req.signal })
+    let body = buildBody(req, wantRich, effortCaps.get(hostKey))
+    let res = await post(body)
+    // A model that rejects only the effort level (e.g. `max` on a model that tops out at
+    // `xhigh`) steps down one level at a time and keeps the rich fields.
+    if (wantRich && (res.status === 400 || res.status === 422)) {
+      let errText = await res.text().catch(() => '')
+      let sent = (body.reasoning as { effort?: WireEffort } | undefined)?.effort
+      let lower = sent ? lowerEffort(sent) : undefined
+      while (lower && isEffortRejection(errText)) {
+        body = buildBody(req, true, lower)
+        res = await post(body)
+        if (res.ok) {
+          if (effortCaps.size > 200) effortCaps.clear()
+          effortCaps.set(hostKey, lower)
+          break
+        }
+        if (res.status !== 400 && res.status !== 422) break
+        errText = await res.text().catch(() => '')
+        sent = lower
+        lower = lowerEffort(sent)
+      }
+    }
     // Compatible Responses proxies may reject `include`, `store`, or `prompt_cache_key`.
     if (wantRich && (res.status === 400 || res.status === 422)) {
-      await res.text().catch(() => '')
       if (plainFallbackHosts.size > 200) plainFallbackHosts.clear()
       plainFallbackHosts.add(hostKey)
       res = await netFetch(url, {

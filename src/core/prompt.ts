@@ -13,6 +13,8 @@ export function systemPrompt(
     computerUse?: boolean
     browserComputerUse?: boolean
     desktopControl?: boolean
+    /** Ultracode: plan a multi-subagent workflow for each substantive task. */
+    ultracode?: boolean
   },
 ): string {
   const today = new Date().toISOString().slice(0, 10)
@@ -55,6 +57,8 @@ export function systemPrompt(
     )
   }
 
+  if (opts?.ultracode) lines.push('', ultracodeDirective(mode))
+
   if (opts?.skillsSummary) lines.push('', opts.skillsSummary)
   if (opts?.pluginRules) lines.push('', opts.pluginRules)
   if (opts?.memoryPrompt) lines.push('', opts.memoryPrompt)
@@ -94,5 +98,35 @@ export function systemPrompt(
   }
 
   if (projectNotes) lines.push('', projectNotes)
+  return lines.join('\n')
+}
+
+/**
+ * Ultracode turns each substantive task into a dynamic workflow of `run_subagent` calls.
+ * It is a separate switch from reasoning effort: the effort level still applies to every agent.
+ */
+export function ultracodeDirective(mode: AgentMode): string {
+  const lines = [
+    '<ultracode>',
+    'ULTRACODE IS ON. For every substantive task (anything beyond a quick question or a one-line change), run it as a dynamic multi-agent workflow with `run_subagent`:',
+    '1. Plan: break the task into independent pieces. State the plan in 2-6 short bullets before dispatching.',
+    '2. Explore in parallel: send several `run_subagent` calls with role="explorer" in ONE turn (they run concurrently), each with a self-contained task, exact paths, and the facts it must report back.',
+  ]
+  if (mode === 'plan') {
+    lines.push(
+      '3. Plan mode is read-only: use explorers only, then merge their findings into one decision-complete plan.',
+    )
+  } else {
+    lines.push(
+      '3. Build: give each independent change to a role="worker" subagent with a precise scope (files it owns, files it must not touch, the check to run). Do small glue edits yourself.',
+      '4. Verify: after the changes, send a fresh role="explorer" subagent to review the diff against the request and run the relevant checks. Fix what it finds.',
+    )
+  }
+  lines.push(
+    '- Give subagents enough rounds for their piece (`max_rounds` up to 30). Never let two workers edit the same file.',
+    '- Skip the workflow for trivial requests and answer directly.',
+    '- Finish with one merged summary: what changed, what was verified, and anything left open.',
+    '</ultracode>',
+  )
   return lines.join('\n')
 }

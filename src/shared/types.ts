@@ -1,7 +1,19 @@
 // Types shared by the core process, the Electron main process, and the renderer.
 
 export type Protocol = 'anthropic' | 'responses' | 'openai'
-export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** Slider order, lowest to highest. `auto` leaves the choice to the model. */
+export const REASONING_EFFORT_LEVELS: readonly ReasoningEffort[] = ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** Returns a valid effort level, or `fallback` for unknown input (old settings files, CLI typos). */
+export function normalizeReasoningEffort(raw: unknown, fallback: ReasoningEffort = 'auto'): ReasoningEffort {
+  if (typeof raw !== 'string') return fallback
+  const v = raw.trim().toLowerCase()
+  if (v === 'x-high' || v === 'extra-high') return 'xhigh'
+  if (v === 'maximum') return 'max'
+  return (REASONING_EFFORT_LEVELS as readonly string[]).includes(v) ? (v as ReasoningEffort) : fallback
+}
 
 export interface ProviderConfig {
   id: string
@@ -797,6 +809,11 @@ export interface AppSettings {
   recentWorkspaces?: string[]
   activeProviderId?: string
   reasoningEffort?: ReasoningEffort
+  /**
+   * Ultracode: for each substantive task the agent plans a multi-subagent workflow
+   * (parallel explorers, scoped workers, an independent verifier). Independent of effort.
+   */
+  ultracode?: boolean
   onboarded: boolean
   proxyMode: ProxyMode
   proxyUrl?: string
