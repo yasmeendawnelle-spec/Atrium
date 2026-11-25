@@ -991,7 +991,7 @@ export class PluginManager {
     }
 
     const pluginsRoot = await realpath(this.pluginsRootDir()).catch(() => resolve(this.pluginsRootDir()))
-    const resolvedDest = resolve(target.installDir)
+    const resolvedDest = await realpath(target.installDir).catch(() => resolve(target.installDir))
     if (resolvedDest.startsWith(pluginsRoot)) {
       await rm(resolvedDest, { recursive: true, force: true })
     }
@@ -1060,7 +1060,8 @@ export class PluginManager {
     sourcePath: string
     origin: PluginOrigin
   }): Promise<{ plugin: InstalledPlugin; createdMcpServers: McpServerConfig[]; warnings: string[] }> {
-    const inspected = await inspectPluginDirectory(opts.destDir)
+    const realInstallDir = await realpath(opts.destDir).catch(() => resolve(opts.destDir))
+    const inspected = await inspectPluginDirectory(realInstallDir)
     if (!inspected) throw new Error('Installed plugin directory could not be verified.')
 
     const existingServers = this.deps.mcp.list()
@@ -1069,7 +1070,7 @@ export class PluginManager {
     const warnings = [...inspected.warnings]
 
     for (const proposal of inspected.mcpProposals) {
-      const { option, unsupportedRuntime } = rewriteMcpOptionForDir(proposal.option, opts.destDir)
+      const { option, unsupportedRuntime } = rewriteMcpOptionForDir(proposal.option, realInstallDir)
       const needsSecret = option.inputs.some((i) => i.required && !i.defaultValue)
       const dup = existingServers.find(
         (s) => !s.pluginId && s.name.toLowerCase() === option.config.name.toLowerCase(),
@@ -1101,7 +1102,7 @@ export class PluginManager {
       origin: opts.origin,
       originLabel: originDisplayLabel(opts.origin),
       sourcePath: opts.sourcePath,
-      installDir: opts.destDir,
+      installDir: realInstallDir,
       enabled: true,
       installedAt: prev?.installedAt ?? now,
       updatedAt: now,

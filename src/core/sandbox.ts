@@ -4,7 +4,7 @@
 // - Linux: Bubblewrap (`bwrap`) root-read-only namespace when installed.
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -382,7 +382,15 @@ function escapeSeatbeltString(val: string): string {
   return val.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-function buildSeatbeltProfile(workspace: string, mode: SandboxMode, allowNetwork: boolean): string {
+function resolveRealPathSync(target: string): string {
+  try {
+    return realpathSync(target)
+  } catch {
+    return target
+  }
+}
+
+function buildSeatbeltProfile(workspace: string, sbTemp: string, mode: SandboxMode, allowNetwork: boolean): string {
   const rules = [
     '(version 1)',
     '(deny default)',
@@ -397,9 +405,8 @@ function buildSeatbeltProfile(workspace: string, mode: SandboxMode, allowNetwork
     '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (regex #"^/dev/fd/"))',
   ]
   if (mode === 'workspace_write') {
-    rules.push(`(allow file-write* (subpath "${escapeSeatbeltString(resolve(workspace))}"))`)
-    rules.push(`(allow file-write* (subpath "${escapeSeatbeltString(tmpdir())}"))`)
-    rules.push('(allow file-write* (subpath "/private/tmp") (subpath "/var/folders"))')
+    rules.push(`(allow file-write* (subpath "${escapeSeatbeltString(resolveRealPathSync(workspace))}"))`)
+    rules.push(`(allow file-write* (subpath "${escapeSeatbeltString(resolveRealPathSync(sbTemp))}"))`)
   }
   if (allowNetwork) {
     rules.push('(allow network*)')
@@ -432,11 +439,13 @@ export async function runSandboxedCommand(opts: {
   const timeout = Math.min(600, Math.max(5, opts.timeoutSeconds ?? 120)) * 1000
   const allowNetwork = opts.allowNetwork !== false
   const ws = resolve(opts.workspace)
+  const realWs = resolveRealPathSync(ws)
 
   let spawnCmd: string
   let spawnArgs: string[]
   let spawnEnv: NodeJS.ProcessEnv = { ...process.env, ATRIUM_SANDBOX: '1', ATRIUM_SANDBOX_MODE: opts.mode }
   let spawnShell = false
+  let spawnCwd = ws
 
   if (process.platform === 'win32') {
     const exe = await ensureWinSandboxExe(opts.dataDir)
@@ -465,9 +474,14 @@ export async function runSandboxedCommand(opts: {
     if (!existsSync('/usr/bin/sandbox-exec')) {
       return { output: 'macOS sandbox-exec is unavailable on this machine.', isError: true, exitCode: null }
     }
-    const profile = buildSeatbeltProfile(ws, opts.mode, allowNetwork)
+    const sbTemp = sandboxTempDir(realWs)
+    mkdirSync(sbTemp, { recursive: true })
+    const realSbTemp = resolveRealPathSync(sbTemp)
+    const profile = buildSeatbeltProfile(realWs, realSbTemp, opts.mode, allowNetwork)
     spawnCmd = '/usr/bin/sandbox-exec'
     spawnArgs = ['-p', profile, '/bin/sh', '-c', opts.command]
+    spawnEnv = { ...spawnEnv, TMPDIR: realSbTemp }
+    spawnCwd = realWs
   } else if (process.platform === 'linux') {
     const bwrap = findBwrapSync()
     if (!bwrap) {
@@ -478,13 +492,17 @@ export async function runSandboxedCommand(opts: {
       }
     }
     spawnCmd = bwrap
-    spawnArgs = ['--ro-bind', '/', '/']
+    // Mount tmpfs /tmp BEFORE binding realWs so workspaces under /tmp are not hidden by the fresh tmpfs.
+    spawnArgs = ['--ro-bind', '/', '/', '--tmpfs', '/tmp', '--dev', '/dev', '--proc', '/proc']
     if (opts.mode === 'workspace_write') {
-      spawnArgs.push('--bind', ws, ws)
+      spawnArgs.push('--bind', realWs, realWs)
+    } else {
+      spawnArgs.push('--ro-bind', realWs, realWs)
     }
-    spawnArgs.push('--tmpfs', '/tmp', '--dev', '/dev', '--proc', '/proc', '--die-with-parent', '--chdir', ws)
+    spawnArgs.push('--die-with-parent', '--chdir', realWs)
     if (!allowNetwork) spawnArgs.push('--unshare-net')
     spawnArgs.push('/bin/sh', '-c', opts.command)
+    spawnCwd = realWs
   } else {
     spawnCmd = opts.command
     spawnArgs = []
@@ -493,7 +511,7 @@ export async function runSandboxedCommand(opts: {
 
   return new Promise((resolvePromise) => {
     const child = spawn(spawnCmd, spawnArgs, {
-      cwd: ws,
+      cwd: spawnCwd,
       shell: spawnShell,
       windowsHide: true,
       env: spawnEnv,

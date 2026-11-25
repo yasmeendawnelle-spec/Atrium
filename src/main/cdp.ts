@@ -2,7 +2,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import net from 'node:net'
-import { join } from 'node:path'
+import { join, win32 as win32Path } from 'node:path'
 import type { BrowserEngine } from '../shared/types.ts'
 
 export interface ChromeBinaryInfo {
@@ -41,15 +41,15 @@ export function chromeCandidatePaths(
     const pf86 = env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)'
     const local = env.LOCALAPPDATA || ''
     const winChrome: ChromeBinaryInfo[] = [
-      join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      ...(local ? [join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')] : []),
+      win32Path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      win32Path.join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ...(local ? [win32Path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')] : []),
     ].map((p) => ({ path: p, label: 'Google Chrome', engine: 'chrome-cdp' }))
 
     const winEdge: ChromeBinaryInfo[] = [
-      join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-      join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-      ...(local ? [join(local, 'Microsoft', 'Edge', 'Application', 'msedge.exe')] : []),
+      win32Path.join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      win32Path.join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      ...(local ? [win32Path.join(local, 'Microsoft', 'Edge', 'Application', 'msedge.exe')] : []),
     ].map((p) => ({ path: p, label: 'Microsoft Edge', engine: 'edge-cdp' }))
 
     detected = preferEngine === 'edge-cdp' ? [...winEdge, ...winChrome] : [...winChrome, ...winEdge]

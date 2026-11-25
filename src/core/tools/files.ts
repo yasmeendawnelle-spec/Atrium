@@ -1,6 +1,6 @@
 // Built-in file tools. Reads are free; writes wait for the user's approval.
 import { execFile, spawn } from 'node:child_process'
-import { readdir, readFile, stat, writeFile, mkdir } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 import type { ToolInfo, WorkspaceFilePreview } from '../../shared/types.ts'
 import { classifyDocumentExt, extractDocument, MAX_DOCUMENT_BYTES } from './documents.ts'
@@ -456,7 +456,8 @@ export async function saveArtifactFile(workspace: string | undefined, requested:
   await mkdir(dirname(file), { recursive: true })
   await writeFile(file, content, 'utf8')
   invalidateWorkspaceFilesCache(workspace)
-  return relative(resolve(workspace), file).replace(/\\/g, '/')
+  const root = await realpath(resolve(workspace)).catch(() => resolve(workspace))
+  return relative(root, file).replace(/\\/g, '/')
 }
 
 export interface PreparedEdit {
