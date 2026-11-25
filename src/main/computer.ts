@@ -1,5 +1,5 @@
 // Main-process OS Desktop Computer Use controller: multi-monitor screen capture,
-// coordinate translation, Win32 input dispatch, floating always-on-top stop HUD, and panic shortcut.
+// coordinate translation, cross-platform input dispatch, floating always-on-top stop HUD, and panic shortcut.
 import { app, BrowserWindow, desktopCapturer, globalShortcut, nativeTheme, screen, type Display } from 'electron'
 import {
   computeScreenshotDimensions,
@@ -16,7 +16,7 @@ import type {
   DesktopWindowInfo,
   DesktopWindowInput,
 } from '../shared/types.ts'
-import { resolveKeyChord, WinDesktopWorker } from './desktopDriver.ts'
+import { DesktopWorker } from './desktopDriver.ts'
 
 const EMERGENCY_STOP_SHORTCUT = 'Alt+Shift+X'
 
@@ -82,7 +82,7 @@ export function matchTargetWindow(
 }
 
 export class ComputerController {
-  private readonly worker: WinDesktopWorker
+  private readonly worker: DesktopWorker
   private readonly getMainWindows: () => BrowserWindow[]
   private readonly onEmergencyStop: () => void
   private readonly skipHud: boolean
@@ -99,7 +99,7 @@ export class ComputerController {
     onEmergencyStop: () => void
     skipHud?: boolean
   }) {
-    this.worker = new WinDesktopWorker(opts.userDataDir)
+    this.worker = new DesktopWorker(opts.userDataDir)
     this.getMainWindows = opts.getMainWindows
     this.onEmergencyStop = opts.onEmergencyStop
     this.skipHud = Boolean(opts.skipHud)
@@ -136,12 +136,34 @@ export class ComputerController {
     return { index: idx, display: ordered[idx]!, all }
   }
 
+  private toDipPoint(pt: { x: number; y: number }): { x: number; y: number } {
+    if (process.platform === 'darwin') {
+      return { x: Math.round(pt.x), y: Math.round(pt.y) }
+    }
+    try {
+      return screen.screenToDipPoint(pt)
+    } catch {
+      return { x: Math.round(pt.x), y: Math.round(pt.y) }
+    }
+  }
+
+  private toWorkerPoint(dip: { x: number; y: number }): { x: number; y: number } {
+    if (process.platform === 'darwin') {
+      return { x: Math.round(dip.x), y: Math.round(dip.y) }
+    }
+    try {
+      return screen.dipToScreenPoint(dip)
+    } catch {
+      return { x: Math.round(dip.x), y: Math.round(dip.y) }
+    }
+  }
+
   private async safeCursorDip(): Promise<{ x: number; y: number }> {
     if (process.platform === 'win32') {
       try {
         const phys = await this.worker.cursor()
         if (phys.x !== 0 || phys.y !== 0) {
-          return screen.screenToDipPoint(phys)
+          return this.toDipPoint(phys)
         }
       } catch {
         /* fallback to Electron screen API */
@@ -151,7 +173,6 @@ export class ComputerController {
   }
 
   private async listMappedWindows(meta: DesktopDisplayInfo): Promise<DesktopWindowInfo[]> {
-    if (process.platform !== 'win32') return []
     let raw: DesktopWindowInfo[] = []
     try {
       raw = await this.worker.listWindows()
@@ -159,8 +180,8 @@ export class ComputerController {
       return []
     }
     return raw.map((w) => {
-      const topLeftDip = screen.screenToDipPoint({ x: w.x, y: w.y })
-      const botRightDip = screen.screenToDipPoint({ x: w.x + w.width, y: w.y + w.height })
+      const topLeftDip = this.toDipPoint({ x: w.x, y: w.y })
+      const botRightDip = this.toDipPoint({ x: w.x + w.width, y: w.y + w.height })
       const dipRect = {
         x: topLeftDip.x,
         y: topLeftDip.y,
@@ -265,11 +286,11 @@ export class ComputerController {
           }
 
     const startDip = mapScreenshotPointToDip(input.x, input.y, meta)
-    const startPhys = screen.dipToScreenPoint(startDip)
+    const startPhys = this.toWorkerPoint(startDip)
     let endPhys: { x: number; y: number } | undefined
     if (input.action === 'drag') {
       const endDip = mapScreenshotPointToDip(input.endX ?? input.x, input.endY ?? input.y, meta)
-      endPhys = screen.dipToScreenPoint(endDip)
+      endPhys = this.toWorkerPoint(endDip)
     }
 
     await this.worker.mouse({
@@ -296,11 +317,9 @@ export class ComputerController {
     if (input.action === 'type') {
       await this.worker.typeText(input.text ?? '')
     } else if (input.action === 'key') {
-      const specs = resolveKeyChord([input.key ?? ''])
-      await this.worker.keyChord(specs)
+      await this.worker.keyChordTokens([input.key ?? ''])
     } else if (input.action === 'hotkey') {
-      const specs = resolveKeyChord(input.keys ?? [])
-      await this.worker.keyChord(specs)
+      await this.worker.keyChordTokens(input.keys ?? [])
     } else {
       throw new Error(`Unsupported keyboard action "${String(input.action)}".`)
     }

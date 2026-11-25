@@ -1,15 +1,239 @@
-// Persistent Win32 OS desktop automation driver (DPI-aware C# SendInput + EnumWindows host over PowerShell).
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+// Cross-platform OS desktop automation driver:
+// - Windows: persistent DPI-aware C# SendInput + EnumWindows worker over PowerShell
+// - macOS: CoreGraphics / ApplicationServices via `osascript -l JavaScript` (JXA)
+// - Linux: X11 / XWayland automation via `xdotool` (and optional `wmctrl` for window states)
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { promisify } from 'node:util'
 import type { DesktopMouseAction, DesktopWindowInfo } from '../shared/types.ts'
+
+const execFileAsync = promisify(execFile)
 
 export interface VirtualKeySpec {
   vk: number
   extended: boolean
   name: string
+}
+
+export interface MacKeySpec {
+  keyCode?: number
+  modifier?: 'cmd' | 'ctrl' | 'alt' | 'shift'
+  name: string
+}
+
+const MAC_LETTER_KEYCODES: Record<string, number> = {
+  a: 0, s: 1, d: 2, f: 3, h: 4, g: 5, z: 6, x: 7, c: 8, v: 9,
+  b: 11, q: 12, w: 13, e: 14, r: 15, y: 16, t: 17, o: 31, u: 32,
+  i: 34, p: 35, l: 37, j: 38, k: 40, n: 45, m: 46,
+}
+
+const MAC_DIGIT_KEYCODES: Record<string, number> = {
+  '0': 29, '1': 18, '2': 19, '3': 20, '4': 21,
+  '5': 23, '6': 22, '7': 26, '8': 28, '9': 25,
+}
+
+const MAC_FUNCTION_KEYCODES: readonly number[] = [
+  122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+  103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+]
+
+const MAC_NAMED_KEYS: Record<string, { keyCode?: number; modifier?: 'cmd' | 'ctrl' | 'alt' | 'shift' }> = {
+  cmd: { keyCode: 55, modifier: 'cmd' },
+  command: { keyCode: 55, modifier: 'cmd' },
+  meta: { keyCode: 55, modifier: 'cmd' },
+  super: { keyCode: 55, modifier: 'cmd' },
+  win: { keyCode: 55, modifier: 'cmd' },
+  lwin: { keyCode: 55, modifier: 'cmd' },
+  rwin: { keyCode: 54, modifier: 'cmd' },
+  ctrl: { keyCode: 59, modifier: 'ctrl' },
+  control: { keyCode: 59, modifier: 'ctrl' },
+  lctrl: { keyCode: 59, modifier: 'ctrl' },
+  rctrl: { keyCode: 62, modifier: 'ctrl' },
+  alt: { keyCode: 58, modifier: 'alt' },
+  option: { keyCode: 58, modifier: 'alt' },
+  menu: { keyCode: 58, modifier: 'alt' },
+  shift: { keyCode: 56, modifier: 'shift' },
+  enter: { keyCode: 36 },
+  return: { keyCode: 36 },
+  tab: { keyCode: 48 },
+  space: { keyCode: 49 },
+  spacebar: { keyCode: 49 },
+  esc: { keyCode: 53 },
+  escape: { keyCode: 53 },
+  backspace: { keyCode: 51 },
+  bs: { keyCode: 51 },
+  delete: { keyCode: 117 },
+  del: { keyCode: 117 },
+  insert: { keyCode: 114 },
+  ins: { keyCode: 114 },
+  home: { keyCode: 115 },
+  end: { keyCode: 119 },
+  pageup: { keyCode: 116 },
+  pgup: { keyCode: 116 },
+  prior: { keyCode: 116 },
+  pagedown: { keyCode: 121 },
+  pgdn: { keyCode: 121 },
+  next: { keyCode: 121 },
+  up: { keyCode: 126 },
+  arrowup: { keyCode: 126 },
+  down: { keyCode: 125 },
+  arrowdown: { keyCode: 125 },
+  left: { keyCode: 123 },
+  arrowleft: { keyCode: 123 },
+  right: { keyCode: 124 },
+  arrowright: { keyCode: 124 },
+  capslock: { keyCode: 57 },
+  '-': { keyCode: 27 },
+  minus: { keyCode: 27 },
+  '=': { keyCode: 24 },
+  equal: { keyCode: 24 },
+  plus: { keyCode: 24 },
+  '[': { keyCode: 33 },
+  ']': { keyCode: 30 },
+  '\\': { keyCode: 42 },
+  ';': { keyCode: 41 },
+  "'": { keyCode: 39 },
+  ',': { keyCode: 43 },
+  '.': { keyCode: 47 },
+  '/': { keyCode: 44 },
+  '`': { keyCode: 50 },
+  backquote: { keyCode: 50 },
+}
+
+/** Maps a human-friendly key token to its macOS ANSI virtual keycode and/or modifier flag. */
+export function resolveMacKeySpec(raw: string): MacKeySpec | null {
+  const token = raw.trim()
+  if (!token) return null
+  const lower = token.toLowerCase()
+  if (lower === ' ') return { keyCode: 49, name: 'space' }
+  const named = MAC_NAMED_KEYS[lower]
+  if (named) return { ...named, name: lower }
+  const fMatch = /^f([1-9]|1[0-9]|20)$/.exec(lower)
+  if (fMatch) {
+    const code = MAC_FUNCTION_KEYCODES[Number(fMatch[1]) - 1]
+    if (code !== undefined) return { keyCode: code, name: lower }
+  }
+  const letterCode = MAC_LETTER_KEYCODES[lower]
+  if (letterCode !== undefined) return { keyCode: letterCode, name: lower }
+  const digitCode = MAC_DIGIT_KEYCODES[lower]
+  if (digitCode !== undefined) return { keyCode: digitCode, name: lower }
+  return null
+}
+
+/** Resolves a key name or hotkey chord (e.g. `["cmd", "shift", "p"]`) for macOS. */
+export function resolveMacKeyChord(keys: string[]): MacKeySpec[] {
+  const out: MacKeySpec[] = []
+  for (const raw of keys) {
+    const parts = raw.includes('+') && raw.length > 1 ? raw.split('+') : [raw]
+    for (const part of parts) {
+      const spec = resolveMacKeySpec(part)
+      if (!spec) throw new Error(`Unsupported macOS key "${part}".`)
+      out.push(spec)
+    }
+  }
+  if (out.length === 0) throw new Error('At least one key is required.')
+  return out
+}
+
+const LINUX_KEYSYMS: Record<string, string> = {
+  ctrl: 'Control_L',
+  control: 'Control_L',
+  lctrl: 'Control_L',
+  rctrl: 'Control_R',
+  alt: 'Alt_L',
+  option: 'Alt_L',
+  menu: 'Menu',
+  shift: 'Shift_L',
+  cmd: 'Super_L',
+  command: 'Super_L',
+  meta: 'Super_L',
+  super: 'Super_L',
+  win: 'Super_L',
+  lwin: 'Super_L',
+  rwin: 'Super_R',
+  enter: 'Return',
+  return: 'Return',
+  tab: 'Tab',
+  esc: 'Escape',
+  escape: 'Escape',
+  space: 'space',
+  spacebar: 'space',
+  backspace: 'BackSpace',
+  bs: 'BackSpace',
+  delete: 'Delete',
+  del: 'Delete',
+  insert: 'Insert',
+  ins: 'Insert',
+  home: 'Home',
+  end: 'End',
+  pageup: 'Prior',
+  pgup: 'Prior',
+  prior: 'Prior',
+  pagedown: 'Next',
+  pgdn: 'Next',
+  next: 'Next',
+  up: 'Up',
+  arrowup: 'Up',
+  down: 'Down',
+  arrowdown: 'Down',
+  left: 'Left',
+  arrowleft: 'Left',
+  right: 'Right',
+  arrowright: 'Right',
+  capslock: 'Caps_Lock',
+  numlock: 'Num_Lock',
+  scrolllock: 'Scroll_Lock',
+  printscreen: 'Print',
+  prtsc: 'Print',
+  snapshot: 'Print',
+  pause: 'Pause',
+  '-': 'minus',
+  minus: 'minus',
+  '=': 'equal',
+  equal: 'equal',
+  plus: 'plus',
+  '[': 'bracketleft',
+  ']': 'bracketright',
+  '\\': 'backslash',
+  ';': 'semicolon',
+  "'": 'apostrophe',
+  ',': 'comma',
+  '.': 'period',
+  '/': 'slash',
+  '`': 'grave',
+  backquote: 'grave',
+}
+
+/** Maps a human-friendly key token to its X11 `xdotool` keysym string. */
+export function resolveLinuxKeySym(raw: string): string | null {
+  const token = raw.trim()
+  if (!token) return null
+  const lower = token.toLowerCase()
+  if (lower === ' ') return 'space'
+  const named = LINUX_KEYSYMS[lower]
+  if (named) return named
+  const fMatch = /^f([1-9]|1[0-9]|2[0-4])$/.exec(lower)
+  if (fMatch) return `F${fMatch[1]}`
+  if (/^[a-z0-9]$/.test(lower)) return lower
+  return null
+}
+
+/** Resolves a key name or hotkey array (e.g. `["ctrl", "shift", "s"]`) to an xdotool combo string. */
+export function resolveLinuxKeyCombo(keys: string[]): string {
+  const out: string[] = []
+  for (const raw of keys) {
+    const parts = raw.includes('+') && raw.length > 1 ? raw.split('+') : [raw]
+    for (const part of parts) {
+      const sym = resolveLinuxKeySym(part)
+      if (!sym) throw new Error(`Unsupported Linux keysym "${part}".`)
+      out.push(sym)
+    }
+  }
+  if (out.length === 0) throw new Error('At least one key is required.')
+  return out.join('+')
 }
 
 const NAMED_VKS: Record<string, { vk: number; extended?: boolean }> = {
@@ -558,7 +782,261 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>
 }
 
-export class WinDesktopWorker {
+const MAC_JXA_DRIVER_SCRIPT = `
+ObjC.import('CoreGraphics');
+ObjC.import('ApplicationServices');
+ObjC.import('AppKit');
+ObjC.import('Foundation');
+
+function modMask(mods) {
+  var mask = 0;
+  for (var i = 0; i < mods.length; i++) {
+    if (mods[i] === 'cmd') mask |= $.kCGEventFlagMaskCommand;
+    else if (mods[i] === 'ctrl') mask |= $.kCGEventFlagMaskControl;
+    else if (mods[i] === 'alt') mask |= $.kCGEventFlagMaskAlternate;
+    else if (mods[i] === 'shift') mask |= $.kCGEventFlagMaskShift;
+  }
+  return mask;
+}
+
+function sendMouse(type, x, y, btn) {
+  var pt = $.CGPointMake(x, y);
+  var ev = $.CGEventCreateMouseEvent(null, type, pt, btn);
+  if (ev) {
+    $.CGEventPost($.kCGHIDEventTap, ev);
+  }
+}
+
+function run() {
+  var raw = $.NSProcessInfo.processInfo.environment.objectForKey('ATRIUM_MAC_OP');
+  var req = JSON.parse(ObjC.unwrap(raw));
+  var op = req.op;
+
+  if (op === 'cursor') {
+    var ev = $.CGEventCreate(null);
+    var pt = $.CGEventGetLocation(ev);
+    return JSON.stringify({ ok: true, x: Math.round(pt.x), y: Math.round(pt.y) });
+  }
+
+  if (op === 'windows') {
+    var frontApp = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+    var frontPid = frontApp ? Number(frontApp.processIdentifier) : -1;
+    var listRef = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
+    var items = ObjC.deepUnwrap(listRef) || [];
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      var w = items[i];
+      if (!w || Number(w.kCGWindowLayer || 0) !== 0) continue;
+      var b = w.kCGWindowBounds || {};
+      var width = Math.round(Number(b.Width || 0));
+      var height = Math.round(Number(b.Height || 0));
+      if (width < 40 || height < 40) continue;
+      var owner = String(w.kCGWindowOwnerName || '');
+      var title = String(w.kCGWindowName || owner || '');
+      if (!title) continue;
+      var pid = Number(w.kCGWindowOwnerPID || 0);
+      out.push({
+        hwnd: String(w.kCGWindowNumber || pid || 0),
+        title: title,
+        processName: owner,
+        pid: pid,
+        x: Math.round(Number(b.X || 0)),
+        y: Math.round(Number(b.Y || 0)),
+        width: width,
+        height: height,
+        minimized: false,
+        maximized: false,
+        foreground: pid === frontPid
+      });
+    }
+    return JSON.stringify({ ok: true, windows: out });
+  }
+
+  if (!$.AXIsProcessTrusted()) {
+    return JSON.stringify({
+      ok: false,
+      error: 'macOS Accessibility permission is required for OS desktop control. Enable Atrium in System Settings -> Privacy & Security -> Accessibility.'
+    });
+  }
+
+  if (op === 'mouse') {
+    var act = String(req.action || 'move');
+    var x = Number(req.x || 0);
+    var y = Number(req.y || 0);
+    var button = String(req.button || 'left');
+    var cgBtn = button === 'right' ? $.kCGMouseButtonRight : button === 'middle' ? $.kCGMouseButtonCenter : $.kCGMouseButtonLeft;
+    var downType = button === 'right' ? $.kCGEventRightMouseDown : button === 'middle' ? $.kCGEventOtherMouseDown : $.kCGEventLeftMouseDown;
+    var upType = button === 'right' ? $.kCGEventRightMouseUp : button === 'middle' ? $.kCGEventOtherMouseUp : $.kCGEventLeftMouseUp;
+
+    sendMouse($.kCGEventMouseMoved, x, y, $.kCGMouseButtonLeft);
+    delay(0.012);
+    if (act === 'move') {
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'click' || act === 'right_click' || act === 'middle_click') {
+      var b = act === 'right_click' ? $.kCGMouseButtonRight : act === 'middle_click' ? $.kCGMouseButtonCenter : cgBtn;
+      var dt = act === 'right_click' ? $.kCGEventRightMouseDown : act === 'middle_click' ? $.kCGEventOtherMouseDown : downType;
+      var ut = act === 'right_click' ? $.kCGEventRightMouseUp : act === 'middle_click' ? $.kCGEventOtherMouseUp : upType;
+      sendMouse(dt, x, y, b);
+      delay(0.015);
+      sendMouse(ut, x, y, b);
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'double_click') {
+      var pt = $.CGPointMake(x, y);
+      for (var c = 1; c <= 2; c++) {
+        var dEv = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, pt, $.kCGMouseButtonLeft);
+        $.CGEventSetIntegerValueField(dEv, $.kCGMouseEventClickState, c);
+        $.CGEventPost($.kCGHIDEventTap, dEv);
+        var uEv = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, pt, $.kCGMouseButtonLeft);
+        $.CGEventSetIntegerValueField(uEv, $.kCGMouseEventClickState, c);
+        $.CGEventPost($.kCGHIDEventTap, uEv);
+        delay(0.018);
+      }
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'down') {
+      sendMouse(downType, x, y, cgBtn);
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'up') {
+      sendMouse(upType, x, y, cgBtn);
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'drag') {
+      var ex = Number(req.endX || x);
+      var ey = Number(req.endY || y);
+      sendMouse($.kCGEventLeftMouseDown, x, y, $.kCGMouseButtonLeft);
+      delay(0.025);
+      var steps = 10;
+      for (var s = 1; s <= steps; s++) {
+        var cx = x + ((ex - x) * s) / steps;
+        var cy = y + ((ey - y) * s) / steps;
+        sendMouse($.kCGEventLeftMouseDragged, cx, cy, $.kCGMouseButtonLeft);
+        delay(0.01);
+      }
+      sendMouse($.kCGEventLeftMouseUp, ex, ey, $.kCGMouseButtonLeft);
+      return JSON.stringify({ ok: true });
+    }
+    if (act === 'scroll') {
+      var dy = Math.round(Number(req.deltaY || 0) / 12);
+      var dx = Math.round(Number(req.deltaX || 0) / 12);
+      var sEv = $.CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitLine, 2, -dy, -dx);
+      $.CGEventPost($.kCGHIDEventTap, sEv);
+      return JSON.stringify({ ok: true });
+    }
+    return JSON.stringify({ ok: false, error: 'Unsupported macOS mouse action: ' + act });
+  }
+
+  if (op === 'type') {
+    var text = String(req.text || '');
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      var buf = Ref('uint16');
+      buf[0] = code;
+      var kDown = $.CGEventCreateKeyboardEvent(null, 0, true);
+      $.CGEventKeyboardSetUnicodeString(kDown, 1, buf);
+      $.CGEventPost($.kCGHIDEventTap, kDown);
+      var kUp = $.CGEventCreateKeyboardEvent(null, 0, false);
+      $.CGEventKeyboardSetUnicodeString(kUp, 1, buf);
+      $.CGEventPost($.kCGHIDEventTap, kUp);
+      delay(0.004);
+    }
+    return JSON.stringify({ ok: true });
+  }
+
+  if (op === 'chord') {
+    var specs = req.specs || [];
+    var mods = [];
+    var keys = [];
+    for (var i = 0; i < specs.length; i++) {
+      if (specs[i].modifier) mods.push(specs[i].modifier);
+      else if (typeof specs[i].keyCode === 'number') keys.push(specs[i].keyCode);
+    }
+    var flags = modMask(mods);
+    if (keys.length === 0 && mods.length > 0 && typeof specs[0].keyCode === 'number') {
+      keys.push(specs[0].keyCode);
+    }
+    for (var i = 0; i < keys.length; i++) {
+      var kd = $.CGEventCreateKeyboardEvent(null, keys[i], true);
+      if (flags) $.CGEventSetFlags(kd, flags);
+      $.CGEventPost($.kCGHIDEventTap, kd);
+      delay(0.01);
+    }
+    for (var i = keys.length - 1; i >= 0; i--) {
+      var ku = $.CGEventCreateKeyboardEvent(null, keys[i], false);
+      if (flags) $.CGEventSetFlags(ku, flags);
+      $.CGEventPost($.kCGHIDEventTap, ku);
+      delay(0.01);
+    }
+    return JSON.stringify({ ok: true });
+  }
+
+  if (op === 'focus' || op === 'windowState') {
+    var targetId = String(req.hwnd || '');
+    var listRef2 = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
+    var items2 = ObjC.deepUnwrap(listRef2) || [];
+    var targetPid = 0;
+    var ownerName = '';
+    for (var i = 0; i < items2.length; i++) {
+      var w2 = items2[i];
+      if (String(w2.kCGWindowNumber || '') === targetId) {
+        targetPid = Number(w2.kCGWindowOwnerPID || 0);
+        ownerName = String(w2.kCGWindowOwnerName || '');
+        break;
+      }
+    }
+    if (!targetPid && Number(targetId) > 0) targetPid = Number(targetId);
+    if (!targetPid) return JSON.stringify({ ok: false });
+    var running = $.NSRunningApplication.runningApplicationWithProcessIdentifier(targetPid);
+    if (running) running.activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
+    if (op === 'windowState' && ownerName) {
+      var se = Application('System Events');
+      var proc = se.processes.byName(ownerName);
+      if (proc && proc.windows.length > 0) {
+        var win = proc.windows[0];
+        if (req.state === 'minimize') win.attributes.byName('AXMinimized').value = true;
+        else if (req.state === 'restore') win.attributes.byName('AXMinimized').value = false;
+        else if (req.state === 'maximize') {
+          try { win.attributes.byName('AXFullScreen').value = true; } catch (e) {}
+        }
+      }
+    }
+    return JSON.stringify({ ok: true });
+  }
+
+  return JSON.stringify({ ok: false, error: 'Unknown op: ' + op });
+}
+run();
+`
+
+async function runMacDesktopOp(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { stdout } = await execFileAsync('osascript', ['-l', 'JavaScript', '-e', MAC_JXA_DRIVER_SCRIPT], {
+    env: { ...process.env, ATRIUM_MAC_OP: JSON.stringify(payload) },
+    timeout: 15_000,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+  const line = stdout.trim().split(/\r?\n/).pop()?.trim() || '{}'
+  const parsed = JSON.parse(line) as Record<string, unknown>
+  if (parsed.ok === false && typeof parsed.error === 'string' && parsed.error) {
+    throw new Error(parsed.error)
+  }
+  return parsed
+}
+
+async function execXdotool(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('xdotool', args, { timeout: 12_000, maxBuffer: 2 * 1024 * 1024 })
+    return stdout
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      throw new Error('Linux desktop automation requires "xdotool" on X11/XWayland (e.g. "sudo apt install xdotool").')
+    }
+    throw err
+  }
+}
+
+export class DesktopWorker {
   private proc: ChildProcessWithoutNullStreams | null = null
   private starting: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
@@ -571,13 +1049,34 @@ export class WinDesktopWorker {
   }
 
   async cursor(): Promise<{ x: number; y: number }> {
+    if (process.platform === 'darwin') {
+      const res = await runMacDesktopOp({ op: 'cursor' })
+      return { x: Number(res.x ?? 0), y: Number(res.y ?? 0) }
+    }
+    if (process.platform === 'linux') {
+      const out = await execXdotool(['getmouselocation', '--shell'])
+      const xMatch = /^X=(-?\d+)/m.exec(out)
+      const yMatch = /^Y=(-?\d+)/m.exec(out)
+      return { x: Number(xMatch?.[1] ?? 0), y: Number(yMatch?.[1] ?? 0) }
+    }
     const res = await this.request({ op: 'cursor' })
     return { x: Number(res.x ?? 0), y: Number(res.y ?? 0) }
   }
 
   async listWindows(): Promise<DesktopWindowInfo[]> {
+    if (process.platform === 'darwin') {
+      const res = await runMacDesktopOp({ op: 'windows' })
+      return this.mapWindowRows(res.windows)
+    }
+    if (process.platform === 'linux') {
+      return this.listLinuxWindows()
+    }
     const res = await this.request({ op: 'windows' })
-    const raw = Array.isArray(res.windows) ? res.windows : []
+    return this.mapWindowRows(res.windows)
+  }
+
+  private mapWindowRows(rawInput: unknown): DesktopWindowInfo[] {
+    const raw = Array.isArray(rawInput) ? rawInput : []
     return raw.map((w: Record<string, unknown>) => ({
       hwnd: String(w.hwnd ?? ''),
       title: String(w.title ?? ''),
@@ -593,6 +1092,55 @@ export class WinDesktopWorker {
     }))
   }
 
+  private async listLinuxWindows(): Promise<DesktopWindowInfo[]> {
+    let activeId = ''
+    try {
+      activeId = (await execXdotool(['getactivewindow'])).trim()
+    } catch {
+      activeId = ''
+    }
+    let idsRaw = ''
+    try {
+      idsRaw = await execXdotool(['search', '--onlyvisible', '--name', '.'])
+    } catch {
+      return []
+    }
+    const ids = idsRaw.trim().split(/\s+/).filter(Boolean).slice(0, 40)
+    const out: DesktopWindowInfo[] = []
+    for (const id of ids) {
+      try {
+        const [geom, name, pidStr] = await Promise.all([
+          execXdotool(['getwindowgeometry', '--shell', id]),
+          execXdotool(['getwindowname', id]).catch(() => ''),
+          execXdotool(['getwindowpid', id]).catch(() => '0'),
+        ])
+        const title = name.trim()
+        if (!title) continue
+        const x = Number(/^X=(-?\d+)/m.exec(geom)?.[1] ?? 0)
+        const y = Number(/^Y=(-?\d+)/m.exec(geom)?.[1] ?? 0)
+        const width = Number(/^WIDTH=(\d+)/m.exec(geom)?.[1] ?? 0)
+        const height = Number(/^HEIGHT=(\d+)/m.exec(geom)?.[1] ?? 0)
+        if (width < 40 || height < 40) continue
+        out.push({
+          hwnd: id,
+          title,
+          processName: '',
+          pid: Number(pidStr.trim()) || 0,
+          x,
+          y,
+          width,
+          height,
+          minimized: false,
+          maximized: false,
+          foreground: id === activeId,
+        })
+      } catch {
+        /* window closed while enumerating */
+      }
+    }
+    return out
+  }
+
   async mouse(opts: {
     action: DesktopMouseAction
     x: number
@@ -603,6 +1151,24 @@ export class WinDesktopWorker {
     deltaY?: number
     button?: 'left' | 'right' | 'middle'
   }): Promise<void> {
+    if (process.platform === 'darwin') {
+      await runMacDesktopOp({
+        op: 'mouse',
+        action: opts.action,
+        x: Math.round(opts.x),
+        y: Math.round(opts.y),
+        endX: Math.round(opts.endX ?? opts.x),
+        endY: Math.round(opts.endY ?? opts.y),
+        deltaX: Math.round(opts.deltaX ?? 0),
+        deltaY: Math.round(opts.deltaY ?? 0),
+        button: opts.button ?? 'left',
+      })
+      return
+    }
+    if (process.platform === 'linux') {
+      await this.runLinuxMouse(opts)
+      return
+    }
     await this.request({
       op: 'mouse',
       action: opts.action,
@@ -616,7 +1182,72 @@ export class WinDesktopWorker {
     })
   }
 
+  private async runLinuxMouse(opts: {
+    action: DesktopMouseAction
+    x: number
+    y: number
+    endX?: number
+    endY?: number
+    deltaX?: number
+    deltaY?: number
+    button?: 'left' | 'right' | 'middle'
+  }): Promise<void> {
+    const x = String(Math.round(opts.x))
+    const y = String(Math.round(opts.y))
+    const btnNum = opts.button === 'right' ? '3' : opts.button === 'middle' ? '2' : '1'
+    await execXdotool(['mousemove', '--sync', x, y])
+    switch (opts.action) {
+      case 'move':
+        return
+      case 'click':
+        await execXdotool(['click', btnNum])
+        return
+      case 'double_click':
+        await execXdotool(['click', '--repeat', '2', '--delay', '40', '1'])
+        return
+      case 'right_click':
+        await execXdotool(['click', '3'])
+        return
+      case 'middle_click':
+        await execXdotool(['click', '2'])
+        return
+      case 'down':
+        await execXdotool(['mousedown', btnNum])
+        return
+      case 'up':
+        await execXdotool(['mouseup', btnNum])
+        return
+      case 'drag': {
+        const ex = String(Math.round(opts.endX ?? opts.x))
+        const ey = String(Math.round(opts.endY ?? opts.y))
+        await execXdotool(['mousedown', '1', 'mousemove', '--sync', ex, ey, 'mouseup', '1'])
+        return
+      }
+      case 'scroll': {
+        const dy = Math.round(opts.deltaY ?? 0)
+        const dx = Math.round(opts.deltaX ?? 0)
+        if (dy !== 0) {
+          const clicks = Math.max(1, Math.min(12, Math.round(Math.abs(dy) / 100)))
+          await execXdotool(['click', '--repeat', String(clicks), dy > 0 ? '5' : '4'])
+        }
+        if (dx !== 0) {
+          const clicks = Math.max(1, Math.min(12, Math.round(Math.abs(dx) / 100)))
+          await execXdotool(['click', '--repeat', String(clicks), dx > 0 ? '7' : '6'])
+        }
+        return
+      }
+    }
+  }
+
   async typeText(text: string): Promise<void> {
+    if (process.platform === 'darwin') {
+      await runMacDesktopOp({ op: 'type', text })
+      return
+    }
+    if (process.platform === 'linux') {
+      await execXdotool(['type', '--clearmodifiers', '--delay', '4', '--', text])
+      return
+    }
     await this.request({ op: 'type', text })
   }
 
@@ -628,12 +1259,55 @@ export class WinDesktopWorker {
     })
   }
 
+  async keyChordTokens(keys: string[]): Promise<void> {
+    if (process.platform === 'darwin') {
+      const specs = resolveMacKeyChord(keys)
+      await runMacDesktopOp({ op: 'chord', specs })
+      return
+    }
+    if (process.platform === 'linux') {
+      const combo = resolveLinuxKeyCombo(keys)
+      await execXdotool(['key', '--clearmodifiers', combo])
+      return
+    }
+    const specs = resolveKeyChord(keys)
+    await this.keyChord(specs)
+  }
+
   async focusWindow(hwnd: string): Promise<boolean> {
+    if (process.platform === 'darwin') {
+      const res = await runMacDesktopOp({ op: 'focus', hwnd })
+      return Boolean(res.ok)
+    }
+    if (process.platform === 'linux') {
+      await execXdotool(['windowactivate', '--sync', hwnd])
+      return true
+    }
     const res = await this.request({ op: 'focus', hwnd: Number(hwnd) || 0 })
     return Boolean(res.ok)
   }
 
   async setWindowState(hwnd: string, state: 'minimize' | 'maximize' | 'restore'): Promise<boolean> {
+    if (process.platform === 'darwin') {
+      const res = await runMacDesktopOp({ op: 'windowState', hwnd, state })
+      return Boolean(res.ok)
+    }
+    if (process.platform === 'linux') {
+      if (state === 'minimize') {
+        await execXdotool(['windowminimize', hwnd])
+        return true
+      }
+      const action = state === 'maximize' ? 'add,maximized_vert,maximized_horz' : 'remove,maximized_vert,maximized_horz'
+      try {
+        await execFileAsync('wmctrl', ['-i', '-r', hwnd, '-b', action], { timeout: 6000 })
+      } catch {
+        /* wmctrl is optional; still ensure window activation on restore */
+      }
+      if (state === 'restore') {
+        await execXdotool(['windowactivate', '--sync', hwnd])
+      }
+      return true
+    }
     const res = await this.request({ op: 'windowState', hwnd: Number(hwnd) || 0, state })
     return Boolean(res.ok)
   }
@@ -662,7 +1336,7 @@ export class WinDesktopWorker {
 
   private async ensureStarted(): Promise<ChildProcessWithoutNullStreams> {
     if (process.platform !== 'win32') {
-      throw new Error(`OS desktop input automation currently requires Windows (detected ${process.platform}).`)
+      throw new Error(`Windows PowerShell desktop worker was invoked on unsupported platform (${process.platform}).`)
     }
     if (this.disposed) throw new Error('Desktop worker has been disposed.')
     if (this.proc && !this.proc.killed && this.proc.exitCode === null) return this.proc
@@ -784,3 +1458,5 @@ export class WinDesktopWorker {
     return run
   }
 }
+
+export { DesktopWorker as WinDesktopWorker }

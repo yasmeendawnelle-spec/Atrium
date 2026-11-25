@@ -253,7 +253,72 @@ function connectWindow(contents: WebContents): void {
 // paints the minimise / maximise / close buttons over it, in the page's colours.
 const TITLEBAR_HEIGHT = 48
 const mac = process.platform === 'darwin'
+const win32 = process.platform === 'win32'
 const chrome = (dark: boolean) => (dark ? { color: '#00000000', symbolColor: '#edece6' } : { color: '#00000000', symbolColor: '#22211f' })
+
+function installMacApplicationMenu(): void {
+  if (!mac) return
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => createWindow(),
+        },
+        { role: 'close' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }],
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
 
 interface WindowBounds {
   width: number
@@ -318,8 +383,12 @@ function createWindow(): void {
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     autoHideMenuBar: true,
     backgroundColor: dark ? '#1e1e1b' : '#faf8f4',
-    titleBarStyle: mac ? 'hiddenInset' : 'hidden',
-    ...(mac ? { trafficLightPosition: { x: 18, y: 17 } } : { titleBarOverlay: { ...chrome(dark), height: TITLEBAR_HEIGHT } }),
+    titleBarStyle: mac ? 'hiddenInset' : win32 ? 'hidden' : 'default',
+    ...(mac
+      ? { trafficLightPosition: { x: 18, y: 17 } }
+      : win32
+        ? { titleBarOverlay: { ...chrome(dark), height: TITLEBAR_HEIGHT } }
+        : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -521,7 +590,7 @@ ipcMain.handle('app.inspectFiles', async (_event, paths: unknown, workspace?: un
 
 // The renderer follows light/dark on its own; this keeps the window buttons in step.
 ipcMain.on('app.titleBarTheme', (event, dark: unknown) => {
-  if (mac) return
+  if (!win32) return
   const win = BrowserWindow.fromWebContents(event.sender)
   try {
     win?.setTitleBarOverlay({ ...chrome(dark === true), height: TITLEBAR_HEIGHT })
@@ -738,7 +807,12 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(() => {
-    app.setAppUserModelId('com.atrium.app')
+    if (win32) app.setAppUserModelId('com.atrium.app')
+    installMacApplicationMenu()
+    if (mac && isDev) {
+      const devIcon = join(__dirname, '../../build/icon.png')
+      if (existsSync(devIcon)) app.dock?.setIcon(devIcon)
+    }
     void builtinBrowser.setMode(defaultBrowserModeForLocale(app.getLocale()), { navigateIfHome: false })
     protocol.handle('atrium-artifact', (request) => {
       const id = new URL(request.url).pathname.replace(/^\/+/, '')

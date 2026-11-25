@@ -20,7 +20,16 @@ import {
   runComputerTool,
   type ComputerHostBridge,
 } from '../src/core/tools/computer_tools.ts'
-import { resolveKeyChord, resolveVirtualKey } from '../src/main/desktopDriver.ts'
+import {
+  DesktopWorker,
+  WinDesktopWorker,
+  resolveKeyChord,
+  resolveLinuxKeyCombo,
+  resolveLinuxKeySym,
+  resolveMacKeyChord,
+  resolveMacKeySpec,
+  resolveVirtualKey,
+} from '../src/main/desktopDriver.ts'
 import {
   computeScreenshotDimensions,
   mapDipPointToScreenshot,
@@ -132,6 +141,36 @@ test('desktopDriver resolves virtual keys, extended flags, and hotkey chords cle
     ],
   )
   assert.throws(() => resolveKeyChord(['unknown_weird_key']), /Unsupported key/)
+  assert.equal(DesktopWorker, WinDesktopWorker)
+})
+
+test('desktopDriver maps macOS ANSI keycodes and Linux X11 keysyms across chords cleanly', () => {
+  assert.equal(resolveMacKeySpec('Enter')?.keyCode, 36)
+  assert.equal(resolveMacKeySpec('F12')?.keyCode, 111)
+  assert.equal(resolveMacKeySpec('cmd')?.modifier, 'cmd')
+  assert.deepEqual(
+    resolveMacKeyChord(['cmd', 'shift', 'p']).map((s) => ({ code: s.keyCode, mod: s.modifier })),
+    [
+      { code: 55, mod: 'cmd' },
+      { code: 56, mod: 'shift' },
+      { code: 35, mod: undefined },
+    ],
+  )
+  assert.deepEqual(
+    resolveMacKeyChord(['cmd+s']).map((s) => ({ code: s.keyCode, mod: s.modifier })),
+    [
+      { code: 55, mod: 'cmd' },
+      { code: 1, mod: undefined },
+    ],
+  )
+  assert.throws(() => resolveMacKeyChord(['unknown_mac_key']), /Unsupported macOS key/)
+
+  assert.equal(resolveLinuxKeySym('Enter'), 'Return')
+  assert.equal(resolveLinuxKeySym('ArrowDown'), 'Down')
+  assert.equal(resolveLinuxKeySym('F12'), 'F12')
+  assert.equal(resolveLinuxKeyCombo(['ctrl', 'shift', 's']), 'Control_L+Shift_L+s')
+  assert.equal(resolveLinuxKeyCombo(['alt+f4']), 'Alt_L+F4')
+  assert.throws(() => resolveLinuxKeyCombo(['unknown_linux_key']), /Unsupported Linux keysym/)
 })
 
 test('runComputerTool and runBrowserTool attach visual screenshots and support coordinate click & scroll', async () => {
