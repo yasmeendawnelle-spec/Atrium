@@ -106,6 +106,34 @@ export async function getGitRepoStatus(dir: string | undefined): Promise<GitRepo
   }
 }
 
+/**
+ * Branch and dirty count from a single `git status` (one process instead of the six
+ * `getGitRepoStatus` spawns), for status lines that must not slow a startup down.
+ * `--no-optional-locks` keeps it from fighting an editor's git for `index.lock`.
+ */
+export async function getGitQuickStatus(
+  dir: string | undefined,
+  timeoutMs = 3_000,
+): Promise<{ isRepo: boolean; branch?: string; dirtyCount: number }> {
+  if (!dir) return { isRepo: false, dirtyCount: 0 }
+  const res = await runGit(dir, ['--no-optional-locks', 'status', '--porcelain=v1', '--branch'], timeoutMs)
+  if (res.code !== 0) return { isRepo: false, dirtyCount: 0 }
+  const lines = res.stdout.split(/\r?\n/)
+  const head = lines[0]?.startsWith('## ') ? lines[0].slice(3) : ''
+  const dirtyCount = lines.filter((l, i) => !(i === 0 && head) && l.trim()).length
+  const branch = parseStatusBranch(head)
+  return { isRepo: true, ...(branch ? { branch } : {}), dirtyCount }
+}
+
+/** `main...origin/main [ahead 1]` → `main`; `No commits yet on dev` → `dev`; detached HEAD → undefined. */
+export function parseStatusBranch(head: string): string | undefined {
+  const text = head.trim()
+  if (!text || text.startsWith('HEAD (no branch)')) return undefined
+  const unborn = /^(?:No commits yet on|Initial commit on) (.+)$/.exec(text)
+  if (unborn) return unborn[1]?.trim() || undefined
+  return text.split('...')[0]?.split(' ')[0]?.trim() || undefined
+}
+
 export async function isLinkedWorktree(dir: string): Promise<boolean> {
   const [gitDir, commonDir] = await Promise.all([
     runGit(dir, ['rev-parse', '--git-dir']),

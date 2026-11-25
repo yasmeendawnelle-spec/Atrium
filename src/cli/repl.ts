@@ -4,7 +4,7 @@ import { basename } from 'node:path'
 import { stdin as defaultStdin, stdout as defaultStdout, stderr as defaultStderr } from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { listWorkspaceFiles } from '../core/tools/files.ts'
-import { getGitRepoStatus } from '../core/tools/git.ts'
+import { getGitQuickStatus } from '../core/tools/git.ts'
 import type {
   AgentMode,
   ApprovalDecision,
@@ -32,6 +32,7 @@ import {
   handleCommitCommand,
   handleConfigCommand,
   handleEffortCommand,
+  handleUltracodeCommand,
   handleGitCommand,
   handleMcpCommand,
   handleMemoryCommand,
@@ -92,7 +93,8 @@ const SLASH_COMMANDS: readonly ComposerCommandItem[] = [
   { cmd: '/theme', hint: 'Switch CLI color theme (warm-studio/claude/codex/agy/minimal)' },
   { cmd: '/model', hint: 'Select active model' },
   { cmd: '/provider', hint: 'Switch, add preset/env BYOK, test, or sync providers' },
-  { cmd: '/effort', hint: 'Adjust reasoning effort level' },
+  { cmd: '/effort', hint: 'Drag the reasoning effort slider (auto…max, u = ultracode)' },
+  { cmd: '/ultracode', hint: 'Toggle Ultracode multi-agent workflows (on/off)' },
   { cmd: '/mode', hint: 'Switch permission mode (auto/accept_edits/plan/manual/bypass)' },
   { cmd: '/scene', hint: 'Switch work scene (code/work)' },
   { cmd: '/context', hint: 'Configure context window size' },
@@ -472,13 +474,19 @@ export async function runInteractiveRepl(
       cachedWorkspaceFiles = []
       return
     }
-    const [gitSt, files] = await Promise.all([
-      getGitRepoStatus(ws).catch(() => null),
-      listWorkspaceFiles(ws, 400).catch(() => []),
-    ])
+    await Promise.all([refreshGitMeta(ws), refreshWorkspaceFiles(ws)])
+  }
+
+  // Branch + dirty count: one `git status` instead of the full repo probe, so it fits in a startup frame.
+  const refreshGitMeta = async (ws = conversation.workspace ?? runtime.workspace) => {
+    const gitSt = ws ? await getGitQuickStatus(ws).catch(() => null) : null
     cachedGitBranch = gitSt?.isRepo ? gitSt.branch : undefined
     cachedGitDirty = gitSt?.isRepo ? gitSt.dirtyCount : 0
-    cachedWorkspaceFiles = files
+  }
+
+  // The @-mention file list is only needed once the user types `@`, so the banner never waits for it.
+  const refreshWorkspaceFiles = async (ws = conversation.workspace ?? runtime.workspace) => {
+    cachedWorkspaceFiles = ws ? await listWorkspaceFiles(ws, 400).catch(() => []) : []
   }
 
   const updateWindowTitle = (busy: boolean) => {
@@ -540,7 +548,7 @@ export async function runInteractiveRepl(
             const cols = (rawStdout as NodeJS.WriteStream).columns || 80
             viewport.renderDock(
               renderWorkingDockLines(
-                { mode: st.agentMode ?? 'auto', effort: st.reasoningEffort ?? 'auto' },
+                { mode: st.agentMode ?? 'auto', effort: st.reasoningEffort ?? 'auto', ultracode: st.ultracode === true },
                 renderer.palette,
                 cols,
               ),
@@ -563,11 +571,13 @@ export async function runInteractiveRepl(
 
   process.on('SIGINT', onProcessSigint)
 
-  const printBanner = async () => {
-    await refreshWorkspaceMeta()
+  /** Gathers everything the welcome screen shows (in parallel) and returns it; writes nothing. */
+  const buildBanner = async (): Promise<string> => {
     const palette = renderer.palette
     const ws = conversation.workspace ?? runtime.workspace
-    const [skills, instructionFiles] = await Promise.all([
+    void refreshWorkspaceFiles(ws)
+    const [, skills, instructionFiles] = await Promise.all([
+      refreshGitMeta(ws),
       runtime.listSkills().catch(() => []),
       detectInstructionFiles(ws).catch(() => []),
     ])
@@ -598,9 +608,7 @@ export async function runInteractiveRepl(
       messageCount: m.messageCount,
     }))
 
-    updateWindowTitle(false)
-    stdout.write(
-      renderWelcomeScreen({
+    return renderWelcomeScreen({
         version: opts.version,
         model: provider?.model,
         providerName: provider?.name,
@@ -608,6 +616,7 @@ export async function runInteractiveRepl(
         mode: settings.agentMode ?? 'auto',
         scene: settings.workScene ?? 'code',
         effort: settings.reasoningEffort ?? 'auto',
+        ultracode: settings.ultracode === true,
         workspace: formatDisplayPath(ws),
         accountLabel: who,
         ...(userName ? { userName } : {}),
@@ -624,8 +633,19 @@ export async function runInteractiveRepl(
         contextLimit: limit,
         cols: (stdout as NodeJS.WriteStream).columns || 80,
         palette,
-      }),
-    )
+      })
+  }
+
+  /**
+   * Clears (when asked) and prints the welcome screen in one go. The banner is built first, so the
+   * terminal never sits on a blank screen while git and the skill list load.
+   */
+  const printBanner = async (clear: 'none' | 'viewport' | 'plain' = 'none') => {
+    const banner = await buildBanner()
+    if (clear === 'viewport' && viewport) viewport.clearScreen()
+    else if (clear === 'plain') stdout.write('\x1b[2J\x1b[0f')
+    updateWindowTitle(false)
+    stdout.write(banner)
   }
 
   const runPromptTurn = async (promptText: string) => {
@@ -641,7 +661,12 @@ export async function runInteractiveRepl(
       const cols = (rawStdout as NodeJS.WriteStream).columns || 80
       viewport.renderDock(
         renderWorkingDockLines(
-          { mode: st.agentMode ?? 'auto', effort: st.reasoningEffort ?? 'auto', status: 'Thinking...' },
+          {
+            mode: st.agentMode ?? 'auto',
+            effort: st.reasoningEffort ?? 'auto',
+            ultracode: st.ultracode === true,
+            status: 'Thinking...',
+          },
           renderer.palette,
           cols,
         ),
@@ -717,12 +742,7 @@ export async function runInteractiveRepl(
         await runtime.settings.update({ cliTheme: nextTheme })
         const updatedPalette = createPalette(palette.enabled, nextTheme)
         renderer.setPalette(updatedPalette)
-        if (isTty) {
-          if (useViewport && viewport) {
-            viewport.clearScreen()
-          }
-          await printBanner()
-        }
+        if (isTty) await printBanner(useViewport && viewport ? 'viewport' : 'none')
         stdout.write(
           `  ${updatedPalette.green('✓')} Theme switched to ${updatedPalette.bold(CLI_THEMES[nextTheme].name)} (${nextTheme}).\n`,
         )
@@ -735,12 +755,7 @@ export async function runInteractiveRepl(
         return 'exit'
 
       case '/clear':
-        if (useViewport && viewport) {
-          viewport.clearScreen()
-        } else {
-          stdout.write('\x1b[2J\x1b[0f')
-        }
-        await printBanner()
+        await printBanner(useViewport && viewport ? 'viewport' : 'plain')
         return 'continue'
 
       case '/doctor':
@@ -901,6 +916,10 @@ export async function runInteractiveRepl(
 
       case '/effort':
         await handleEffortCommand(runtime, arg, commandIo)
+        return 'continue'
+
+      case '/ultracode':
+        await handleUltracodeCommand(runtime, arg, commandIo)
         return 'continue'
 
       case '/config':
@@ -1242,10 +1261,15 @@ export async function runInteractiveRepl(
     }
   }
 
-  if (useViewport && viewport) {
-    viewport.init(5)
+  {
+    // Build first, then clear and draw: the old screen stays until the new one is ready.
+    const banner = await buildBanner()
+    if (useViewport && viewport) viewport.init(5)
+    updateWindowTitle(false)
+    stdout.write(banner)
+    // MCP servers are child processes; spawning them after the first frame keeps it from stalling.
+    setTimeout(() => runtime.startMcp(), 0).unref?.()
   }
-  await printBanner()
 
   if (isTty && !runtime.account.isConnected() && runtime.settings.listProviders().length === 0) {
     const palette = renderer.palette
@@ -1357,6 +1381,7 @@ export async function runInteractiveRepl(
             mode: settings.agentMode ?? 'auto',
             model: provider?.model,
             effort: settings.reasoningEffort ?? 'auto',
+            ultracode: settings.ultracode === true,
             gitBranch: cachedGitBranch,
             gitDirty: cachedGitDirty,
             contextUsed: estimateConversationTokens(conversation),
@@ -1433,7 +1458,12 @@ export async function runInteractiveRepl(
           const cols = (rawStdout as NodeJS.WriteStream).columns || 80
           viewport.renderDock(
             renderWorkingDockLines(
-              { mode: st.agentMode ?? 'auto', effort: st.reasoningEffort ?? 'auto', status: 'Running shell command...' },
+              {
+                mode: st.agentMode ?? 'auto',
+                effort: st.reasoningEffort ?? 'auto',
+                ultracode: st.ultracode === true,
+                status: 'Running shell command...',
+              },
               palette,
               cols,
             ),

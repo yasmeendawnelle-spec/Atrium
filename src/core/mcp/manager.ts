@@ -47,7 +47,12 @@ export class McpManager {
   async load(opts?: { connect?: boolean }): Promise<void> {
     this.configs = await readJson(this.path(), [] as McpServerConfig[])
     if (opts?.connect === false) return
-    for (const config of this.configs) if (config.enabled) void this.connect(config)
+    this.connectEnabled()
+  }
+
+  /** Starts every enabled server that has no client yet (lets a caller defer `load`'s connects). */
+  connectEnabled(): void {
+    for (const config of this.configs) if (config.enabled && !this.clients.has(config.id)) void this.connect(config)
   }
 
   list(): McpServerConfig[] {

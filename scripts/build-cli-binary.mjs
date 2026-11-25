@@ -88,7 +88,10 @@ export async function buildCliBinary({ outPath, noBuild = false } = {}) {
         main: bundlePath,
         output: seaBlobPath,
         disableExperimentalSEAWarning: true,
-        useCodeCache: false,
+        // V8 code cache: the binary skips compiling the 7 MB bundle on every launch (~100 ms on Windows).
+        // The cache is built by this same Node on the target OS; each CI job builds natively, and a
+        // mismatched cache is just ignored by V8, never an error.
+        useCodeCache: true,
       },
       null,
       2,

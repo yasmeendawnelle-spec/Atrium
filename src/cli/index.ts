@@ -91,6 +91,8 @@ export async function runCli(
     ...(args.maxTurns !== undefined ? { maxRounds: args.maxTurns } : {}),
     ...(args.noPersistence ? { noPersistence: true } : {}),
     connectMcp: args.command === 'chat',
+    // The REPL starts MCP servers right after its first screen (see runInteractiveRepl).
+    deferMcpConnect: args.command === 'chat' && !isOneShot,
     unattended: isOneShot && !args.yes,
     autoApprove: args.yes,
   })
@@ -335,6 +337,7 @@ Commands:
           ...(args.mode !== undefined ? { mode: args.mode } : {}),
           ...(args.scene !== undefined ? { scene: args.scene } : {}),
           ...(args.effort !== undefined ? { effort: args.effort } : {}),
+          ...(args.ultracode !== undefined ? { ultracode: args.ultracode } : {}),
           ...(args.workspace !== undefined ? { workspace: args.workspace } : {}),
         })
 
@@ -349,6 +352,7 @@ Commands:
             json: streamJson,
             stdout,
             stderr,
+            ultracode: () => runtime.settings.get().ultracode === true,
           })
           if (!combinedPrompt) {
             renderer.dispose()
@@ -421,6 +425,7 @@ Commands:
           json: streamJson,
           stdout: viewport.enabled ? viewport.transcriptStream : stdout,
           stderr: viewport.enabled ? viewport.transcriptStream : stderr,
+          ultracode: () => runtime.settings.get().ultracode === true,
         })
 
         const conversation = await runtime.openOrCreateChat({

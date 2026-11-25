@@ -8,7 +8,7 @@ import { McpManager } from '../core/mcp/manager.ts'
 import { MemoryStore } from '../core/memory.ts'
 import { configureNetwork } from '../core/net.ts'
 import { PluginManager } from '../core/plugins.ts'
-import { systemPrompt } from '../core/prompt.ts'
+import { systemPrompt, ultracodeDirective } from '../core/prompt.ts'
 import { bindSecrets } from '../core/secrets.ts'
 import { SettingsStore } from '../core/settings.ts'
 import { TerminalManager } from '../core/terminal.ts'
@@ -30,6 +30,7 @@ import type {
   SkillInfo,
   WorkScene,
 } from '../shared/types.ts'
+import { normalizeAgentMode } from '../shared/types.ts'
 import { CliSecretStore, createCliHostCall, openExternalUrl, resolveCliHome } from './secrets.ts'
 
 export interface CliRuntimeOptions {
@@ -43,6 +44,11 @@ export interface CliRuntimeOptions {
   maxRounds?: number
   noPersistence?: boolean
   connectMcp?: boolean
+  /**
+   * Load MCP configs but wait for `startMcp()` before spawning servers, so the interactive CLI can
+   * draw its first screen before several child processes compete for the CPU.
+   */
+  deferMcpConnect?: boolean
   onAgentEvent?: (ev: AgentEvent) => void
   onApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>
 }
@@ -81,6 +87,7 @@ export class CliRuntime {
   private autoApproveFlag: boolean
   private noPersistenceFlag: boolean
   private connectMcpFlag: boolean
+  private deferMcpFlag: boolean
   private eventListeners = new Set<(ev: AgentEvent) => void>()
   private approvalHandler: ((req: ApprovalRequest) => Promise<ApprovalDecision>) | undefined
   private initialized = false
@@ -94,6 +101,7 @@ export class CliRuntime {
     this.autoApproveFlag = Boolean(opts.autoApprove)
     this.noPersistenceFlag = Boolean(opts.noPersistence)
     this.connectMcpFlag = opts.connectMcp !== false
+    this.deferMcpFlag = Boolean(opts.deferMcpConnect)
     this.approvalHandler = opts.onApproval
     if (opts.onAgentEvent) this.eventListeners.add(opts.onAgentEvent)
 
@@ -141,7 +149,11 @@ export class CliRuntime {
     })
 
     const customSystemPrompt: typeof systemPrompt = (ws, notes, spOpts) => {
-      if (opts.systemPromptOverride?.trim()) return opts.systemPromptOverride.trim()
+      if (opts.systemPromptOverride?.trim()) {
+        const override = opts.systemPromptOverride.trim()
+        // Keep the Ultracode workflow rules even when the user replaces the base prompt.
+        return spOpts?.ultracode ? `${override}\n\n${ultracodeDirective(normalizeAgentMode(spOpts.mode, 'auto'))}` : override
+      }
       const base = systemPrompt(ws, notes, spOpts)
       if (opts.appendSystemPrompt?.trim()) return `${base}\n\n${opts.appendSystemPrompt.trim()}`
       return base
@@ -233,9 +245,14 @@ export class CliRuntime {
       this.account.load(),
       this.plugins.load(),
       this.memory.load(),
-      this.mcp.load({ connect: this.connectMcpFlag }),
+      this.mcp.load({ connect: this.connectMcpFlag && !this.deferMcpFlag }),
     ])
     this.initialized = true
+  }
+
+  /** Spawns the enabled MCP servers held back by `deferMcpConnect`. Safe to call more than once. */
+  startMcp(): void {
+    if (this.connectMcpFlag && !this.disposed) this.mcp.connectEnabled()
   }
 
   async applyOverrides(opts: {
@@ -244,6 +261,7 @@ export class CliRuntime {
     mode?: AgentMode
     scene?: WorkScene
     effort?: ReasoningEffort
+    ultracode?: boolean
     workspace?: string
   }): Promise<void> {
     if (opts.workspace) {
@@ -253,11 +271,13 @@ export class CliRuntime {
       agentMode?: AgentMode
       workScene?: WorkScene
       reasoningEffort?: ReasoningEffort
+      ultracode?: boolean
       workspace?: string
     } = {}
     if (opts.mode) patch.agentMode = opts.mode
     if (opts.scene) patch.workScene = opts.scene
     if (opts.effort) patch.reasoningEffort = opts.effort
+    if (opts.ultracode !== undefined) patch.ultracode = opts.ultracode
     if (opts.workspace) patch.workspace = this.workspace
     if (Object.keys(patch).length > 0) {
       await this.settings.update(patch)

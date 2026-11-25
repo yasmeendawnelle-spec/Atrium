@@ -21,6 +21,8 @@ export interface CliRendererOptions {
   json?: boolean
   stdout?: NodeJS.WritableStream
   stderr?: NodeJS.WritableStream
+  /** Read on every spinner frame, so toggling `/ultracode` mid-session restyles the next turn. */
+  ultracode?: () => boolean
 }
 
 function isStreamTty(stream: NodeJS.WritableStream): boolean {
@@ -272,6 +274,7 @@ export function createRenderer(opts: CliRendererOptions = {}): CliRenderer {
       stream: stderr,
       palette,
       enabled: !jsonMode && stderrTty,
+      ...(opts.ultracode ? { ultracode: opts.ultracode } : {}),
     })
 
   const buildMarkdownStream = () =>

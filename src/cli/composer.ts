@@ -26,6 +26,7 @@ export interface ComposerStatusMeta {
   mode: AgentMode
   model?: string
   effort: ReasoningEffort
+  ultracode?: boolean
   gitBranch?: string
   gitDirty?: number
   contextUsed: number
@@ -121,12 +122,12 @@ export function renderSubmittedPromptBlock(text: string, palette: CliPalette, co
 
 /** Computes a quiet 5-row bottom dock shown while a turn is running in viewport mode. */
 export function renderWorkingDockLines(
-  meta: { mode: AgentMode; effort: ReasoningEffort; status?: string },
+  meta: { mode: AgentMode; effort: ReasoningEffort; ultracode?: boolean; status?: string },
   palette: CliPalette,
   cols = 80,
 ): string[] {
   const boxW = Math.max(36, cols - 1)
-  const effortRight = `${formatEffortBadge(meta.effort, palette)} ${palette.subtle('· /effort')}`
+  const effortRight = `${formatEffortBadge(meta.effort, palette, meta.ultracode)} ${palette.subtle('· /effort')}`
   const rule = palette.border('─'.repeat(boxW))
   const statusLine = truncateVisible(
     `  ${palette.accent('✳')} ${palette.muted(meta.status ?? 'Working...')} ${palette.subtle('· esc / ctrl+c to interrupt')}`,
@@ -472,7 +473,7 @@ export async function readComposerInput(opts: ComposerPromptOptions): Promise<Co
     const layout = layoutBuffer(buffer, cursorOffset, maxTextWidth, palette, placeholder)
     const meta = opts.getStatusMeta()
 
-    const effortRight = `${formatEffortBadge(meta.effort, palette)} ${palette.subtle('· /effort')}`
+    const effortRight = `${formatEffortBadge(meta.effort, palette, meta.ultracode)} ${palette.subtle('· /effort')}`
     const effortRow = justifyRow(toastText ? `  ${palette.yellow(toastText)}` : '', effortRight, boxW)
     const hairline = palette.border('─'.repeat(boxW))
     const inputRows = layout.lines.map((l) => truncateVisible(l, boxW))
@@ -631,7 +632,7 @@ export async function readComposerInput(opts: ComposerPromptOptions): Promise<Co
         const cols = Math.max(40, output.columns || 80)
         if (result.kind === 'submit') {
           const expanded = expandPastedTokens(result.text)
-          viewport.renderDock(renderWorkingDockLines({ mode: meta.mode, effort: meta.effort }, palette, cols), null)
+          viewport.renderDock(renderWorkingDockLines({ mode: meta.mode, effort: meta.effort, ultracode: meta.ultracode }, palette, cols), null)
           resolve({ kind: 'submit', text: expanded })
         } else {
           rawOut.write('\x1b[?25h')

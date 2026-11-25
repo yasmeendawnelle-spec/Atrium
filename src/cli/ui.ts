@@ -1,5 +1,6 @@
 // Terminal UI chrome: star/braille spinner, effort & progress gauges, Claude-Code hero header, and clean hairline cards.
 import type { AgentMode, ReasoningEffort, WorkScene } from '../shared/types.ts'
+import { gradientText, mixRgb, motionEnabled, paintRgb, sparkFrame, toneRgb, ultraStops } from './fx.ts'
 import {
   padVisible,
   truncateVisible,
@@ -25,9 +26,12 @@ export function createSpinner(opts: {
   stream: NodeJS.WritableStream
   palette: CliPalette
   enabled: boolean
+  /** While it returns true, the label flows in the Ultracode colours with a moving shine. */
+  ultracode?: () => boolean
 }): Spinner {
   const { stream, palette, enabled } = opts
   const frames = palette.themeId === 'minimal' ? BRAILLE_FRAMES : STAR_FRAMES
+  const motion = motionEnabled(stream)
   let timer: ReturnType<typeof setInterval> | null = null
   let frameIdx = 0
   let startedAt = 0
@@ -44,7 +48,16 @@ export function createSpinner(opts: {
     frameIdx += 1
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
     const cols = Math.max(40, (stream as NodeJS.WriteStream).columns || 80)
-    const left = `${palette.accent(frame)} ${palette.bold(label)}${metaText ? ` ${palette.muted(metaText)}` : ''} ${palette.subtle(`(${elapsed}s)`)}`
+    const ultra = opts.ultracode?.() === true
+    let head = `${palette.accent(frame)} ${palette.bold(label)}`
+    if (ultra) {
+      const stops = ultraStops(palette)
+      const f = motion ? frameIdx : 0
+      const spark = gradientText(sparkFrame(Math.floor(f / 2)), palette, stops, { wrap: true, phase: f * 0.05 })
+      const shine = motion ? (f * 0.7) % (label.length + 10) - 4 : undefined
+      head = `${spark} ${gradientText(label, palette, stops, { wrap: true, phase: f * 0.03, bold: true, ...(shine !== undefined ? { shine } : {}) })}`
+    }
+    const left = `${head}${metaText ? ` ${palette.muted(metaText)}` : ''} ${palette.subtle(`(${elapsed}s)`)}`
     const hint = palette.subtle('esc / ctrl+c to interrupt')
     const full =
       visibleWidth(left) + visibleWidth(hint) + 3 < cols
@@ -115,8 +128,15 @@ export function formatCompactTokens(tokens: number): string {
   return String(Math.max(0, Math.round(tokens)))
 }
 
-export function formatEffortBadge(effort: ReasoningEffort, palette: CliPalette): string {
+export function formatEffortBadge(effort: ReasoningEffort, palette: CliPalette, ultracode = false): string {
+  const base = formatEffortLevelBadge(effort, palette)
+  return ultracode ? `${base} ${gradientText('✦ ultracode', palette, ultraStops(palette), { bold: true })}` : base
+}
+
+function formatEffortLevelBadge(effort: ReasoningEffort, palette: CliPalette): string {
   switch (effort) {
+    case 'max':
+      return `${palette.accent('◆')} ${palette.bold('max')}`
     case 'low':
       return `${palette.subtle('○')} ${palette.muted('low')}`
     case 'medium':
@@ -212,6 +232,7 @@ export interface WelcomeScreenOptions {
   mode: AgentMode
   scene: WorkScene
   effort: ReasoningEffort
+  ultracode?: boolean
   workspace: string
   accountLabel: string
   userName?: string
@@ -246,19 +267,24 @@ interface EmblemColorSpec {
 
 type EmblemColorMap = Readonly<Record<string, EmblemColorSpec>>
 
-// 10x10 pixel mask faithfully rasterized from build/icon.svg:
-// 3 interlocking hexagonal arms separated by 120-degree gaps + 3D 3-facet central crystal.
+// 14x14 pixel mask rasterized from build/icon.svg (5x5 supersampling of the real paths): three hexagonal
+// arms with their 120-degree gaps, around the three-facet crystal. Two pixel rows share one terminal row
+// through half blocks, so it draws as 14 columns x 7 rows with square pixels.
 const ATRIUM_EMBLEM_GRID: readonly string[] = [
-  '....11....',
-  '...11122..',
-  '.6.....22.',
-  '66..LR..22',
-  '66.LLRR...',
-  '66.LDDR.33',
-  '55..DD..33',
-  '.55....33.',
-  '..5.4444..',
-  '....44....',
+  '......11......',
+  '....111112....',
+  '....1111222...',
+  '.555.....2222.',
+  '.555......222.',
+  '.65...LR...2..',
+  '.66..LLRR.....',
+  '.66..LDDR..43.',
+  '.66..DDDD..33.',
+  '.666..DD..333.',
+  '.6666....3333.',
+  '...66.33333...',
+  '......3333....',
+  '......33......',
 ]
 
 const EMBLEM_TERRACOTTA_PALETTE: EmblemColorMap = {
@@ -379,47 +405,84 @@ export function renderAtriumEmblem(palette: CliPalette): string[] {
   return rows
 }
 
-/** Claude-Code-inspired borderless top hero header with multi-tone Atrium prism emblem and quiet notice rail. */
+const WELCOME_TAGLINE = 'AI agent workbench for your terminal'
+const WELCOME_BOX_MAX = 92
+const WELCOME_BOX_MIN_COLS = 60
+
+const MODE_LABELS: Record<AgentMode, string> = {
+  auto: 'auto mode',
+  manual: 'manual mode',
+  accept_edits: 'accept-edits mode',
+  plan: 'plan mode',
+  bypass: 'bypass mode',
+}
+
+/**
+ * Welcome hero: the prism emblem beside the session facts, in a rounded card, with a row of starter
+ * keys underneath. Under 60 columns the card and emblem drop away and only the facts remain.
+ */
 export function renderWelcomeScreen(opts: WelcomeScreenOptions): string {
   const { palette, cols } = opts
   const maxW = Math.max(40, cols - 2)
-  const emblem = renderAtriumEmblem(palette)
 
-  const meta1 = `${palette.bold('Atrium')} ${palette.subtle(`v${opts.version}`)}`
-  const meta2 = opts.model
-    ? palette.muted(`${opts.model} · ${opts.providerName ?? 'Atrium Cloud'}`)
-    : palette.yellow('Not configured · Run /login or /provider add')
-  const gitSuffix = opts.gitBranch
-    ? ` ${palette.subtle(`(${opts.gitBranch}${opts.gitDirty ? `*${opts.gitDirty}` : ''})`)}`
+  const title = `${gradientText('Atrium', palette, [toneRgb(palette, 'accentSoft'), toneRgb(palette, 'accent')], {
+    bold: true,
+  })} ${palette.subtle(`v${opts.version}`)}`
+  const modelLine = opts.model
+    ? `${palette.green('●')} ${palette.muted('Using')} ${palette.bold(opts.model)} ${palette.muted(
+        `(${opts.providerName ?? 'Atrium'}) · /model`,
+      )}`
+    : `${palette.yellow('○')} ${palette.yellow('No active model · Run /login or /provider add')}`
+  const git = opts.gitBranch
+    ? `  ${palette.subtle('git:')}${palette.cyan(opts.gitBranch)}${opts.gitDirty ? palette.yellow(`*${opts.gitDirty}`) : ''}`
     : ''
-  const meta3 = `${palette.muted(opts.workspace)}${gitSuffix}`
+  const workspaceLine = `${palette.accent('▸')} ${palette.muted(opts.workspace)}${git}`
+  const profileLine = `${formatEffortBadge(opts.effort, palette, opts.ultracode === true)} ${palette.subtle('·')} ${palette.muted(
+    MODE_LABELS[opts.mode] ?? `${opts.mode} mode`,
+  )}`
 
-  const noticeText = opts.model
-    ? `Using ${opts.model} (${opts.providerName ?? 'Atrium'}) · /model`
-    : 'No active model · Run /login or /provider add'
-
-  const lines: string[] = [
-    '',
-    truncateVisible(` ${emblem[0] ?? ''}`, maxW),
-    truncateVisible(` ${emblem[1] ?? ''}   ${meta1}`, maxW),
-    truncateVisible(` ${emblem[2] ?? ''}   ${meta2}`, maxW),
-    truncateVisible(` ${emblem[3] ?? ''}   ${meta3}`, maxW),
-    truncateVisible(` ${emblem[4] ?? ''}`, maxW),
-    '',
-    truncateVisible(` ${palette.border('│')} ${palette.muted(noticeText)}`, maxW),
-  ]
-
+  const key = (k: string, label: string) => `${palette.accent(k)} ${palette.subtle(label)}`
+  // Keep whole hints only: drop the tail ones on narrow terminals instead of cutting one in half.
+  let tips = ''
+  for (const tip of [key('/help', 'commands'), key('/model', 'models'), key('/effort', 'thinking'), key('@', 'files'), key('!', 'shell')]) {
+    const next = tips ? `${tips}   ${tip}` : tip
+    if (visibleWidth(next) + 2 > maxW) break
+    tips = next
+  }
+  const footer: string[] = [`  ${tips}`]
   if (opts.instructionFiles && opts.instructionFiles.length > 0) {
-    lines.push(
-      truncateVisible(
-        ` ${palette.border('│')} ${palette.subtle(`Loaded ${opts.instructionFiles.join(', ')} · /init`)}`,
-        maxW,
-      ),
-    )
+    footer.push(truncateVisible(`  ${palette.subtle(`Loaded ${opts.instructionFiles.join(', ')} · /init`)}`, maxW))
   }
 
-  lines.push('')
-  return lines.join('\n')
+  if (cols < WELCOME_BOX_MIN_COLS) {
+    const facts = [title, modelLine, workspaceLine, profileLine].map((l) => truncateVisible(` ${l}`, maxW))
+    return ['', ...facts, '', ...footer, ''].join('\n')
+  }
+
+  // Emblem rows and fact rows line up one to one; blank fact rows keep the text centred on the prism.
+  const emblem = renderAtriumEmblem(palette)
+  const facts = ['', title, palette.muted(WELCOME_TAGLINE), '', modelLine, workspaceLine, profileLine]
+  const boxW = Math.min(maxW, WELCOME_BOX_MAX)
+  const innerW = boxW - 2
+  const emblemW = visibleWidth(emblem[0] ?? '')
+  const factW = Math.max(8, innerW - 3 - emblemW - 4)
+  const frameRgb =
+    palette.enabled && palette.themeId !== 'minimal' ? mixRgb(toneRgb(palette, 'border'), toneRgb(palette, 'accent'), 0.3) : null
+  const frame = (s: string) => (frameRgb ? paintRgb(s, frameRgb, palette) : palette.border(s))
+
+  const rows = emblem.map((art, i) => {
+    const body = `   ${art}    ${truncateVisible(facts[i] ?? '', factW)}`
+    return `${frame('│')}${padVisible(body, innerW)}${frame('│')}`
+  })
+  return [
+    '',
+    frame(`╭${'─'.repeat(innerW)}╮`),
+    ...rows,
+    frame(`╰${'─'.repeat(innerW)}╯`),
+    '',
+    ...footer,
+    '',
+  ].join('\n')
 }
 
 export interface StatusBarOptions {
@@ -473,7 +536,8 @@ export function renderHelpCard(palette: CliPalette, cols?: number): string {
     cmd('/theme [id]', 'Switch CLI theme (live)'),
     cmd('/model [id]', 'Searchable model picker'),
     cmd('/provider', 'Add, test, or switch BYOK'),
-    cmd('/effort <lvl>', 'auto|low|medium|high|xhigh'),
+    cmd('/effort [lvl]', 'Slider: auto…xhigh|max'),
+    cmd('/ultracode', 'Toggle multi-agent workflows'),
     cmd('/mode <name>', 'auto|accept_edits|plan|man'),
     cmd('/scene <kind>', 'Switch code or work focus'),
     cmd('/context <n>', 'Context cap (auto, 128k)'),

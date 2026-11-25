@@ -1,5 +1,11 @@
 // CLI command & flag parser for Atrium across Windows, macOS, and Linux (Claude-Code compatible).
-import type { AgentMode, ReasoningEffort, WorkScene } from '../shared/types.ts'
+import {
+  normalizeReasoningEffort,
+  REASONING_EFFORT_LEVELS,
+  type AgentMode,
+  type ReasoningEffort,
+  type WorkScene,
+} from '../shared/types.ts'
 
 export type CliCommand =
   | 'chat'
@@ -29,6 +35,7 @@ export interface ParsedCliArgs {
   mode?: AgentMode
   scene?: WorkScene
   effort?: ReasoningEffort
+  ultracode?: boolean
   resume?: string | true
   continueWorkspace: boolean
   forkSession: boolean
@@ -96,9 +103,9 @@ function parseScene(raw: string): WorkScene {
 }
 
 function parseEffort(raw: string): ReasoningEffort {
-  const v = raw.trim().toLowerCase()
-  if (v === 'auto' || v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh') return v
-  throw new Error(`Invalid --effort "${raw}". Expected one of: auto, low, medium, high, xhigh.`)
+  const v = normalizeReasoningEffort(raw, 'auto')
+  if (v !== 'auto' || raw.trim().toLowerCase() === 'auto') return v
+  throw new Error(`Invalid --effort "${raw}". Expected one of: ${REASONING_EFFORT_LEVELS.join(', ')}.`)
 }
 
 function parseOutputFormat(raw: string): CliOutputFormat {
@@ -269,8 +276,18 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       case '--scene':
         result.scene = parseScene(readVal())
         break
-      case '--effort':
-        result.effort = parseEffort(readVal())
+      case '--effort': {
+        const raw = readVal()
+        // `--effort ultracode` mirrors `/effort ultracode`: it turns the Ultracode switch on.
+        if (raw.trim().toLowerCase() === 'ultracode') result.ultracode = true
+        else result.effort = parseEffort(raw)
+        break
+      }
+      case '--ultracode':
+        result.ultracode = true
+        break
+      case '--no-ultracode':
+        result.ultracode = false
         break
       case '-n':
       case '--name':
@@ -374,7 +391,8 @@ Options:
   --mode, --permission-mode <m>   auto | manual | accept_edits (acceptEdits) | plan | bypass
   --dangerously-skip-permissions  Bypass all tool confirmation prompts (same as --mode bypass -y)
   --scene <scene>                 Work scene focus: code | work
-  --effort <level>                Reasoning effort: auto | low | medium | high | xhigh
+  --effort <level>                Reasoning effort: auto | low | medium | high | xhigh | max
+  --ultracode, --no-ultracode     Plan a multi-subagent workflow for each task (independent of effort)
   --output-format <fmt>           Print output format: text | json | stream-json
   --system-prompt <prompt>        Replace default system prompt
   --append-system-prompt <p>      Append instructions to the default system prompt
@@ -388,7 +406,7 @@ Options:
   -h, --help                      Show this help message
 
 Interactive Slash Commands & Composer Shortcuts:
-  /help /theme /login /logout /account /status /doctor /model /provider /effort /mode
+  /help /theme /login /logout /account /status /doctor /model /provider /effort /ultracode /mode
   /scene /context /config /usage /thinking /new /resume /retry /fork /rename /compact
   /export /cwd /init /mcp /plugin /skills /memory /permissions /diff /undo /rewind /git
   /commit /clear /exit

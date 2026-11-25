@@ -84,9 +84,10 @@ test('thinking: xhigh maps cleanly for adaptive and legacy budget Claude models'
   assert.deepEqual(adaptive.thinking, { type: 'adaptive' })
   assert.deepEqual(adaptive.outputConfig, { effort: 'high' })
 
+  // Opus 4.7 supports xhigh natively, so it must not be downgraded.
   const opus47 = buildAnthropicThinking('claude-opus-4-7', 16_000, 'xhigh')
   assert.deepEqual(opus47.thinking, { type: 'adaptive', display: 'summarized' })
-  assert.deepEqual(opus47.outputConfig, { effort: 'high' })
+  assert.deepEqual(opus47.outputConfig, { effort: 'xhigh' })
 
   const budget = buildAnthropicThinking('claude-3-7-sonnet-20250219', 64_000, 'xhigh')
   assert.deepEqual(budget.thinking, { type: 'enabled', budget_tokens: 32768 })

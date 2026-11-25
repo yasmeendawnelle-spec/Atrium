@@ -1041,35 +1041,37 @@ test('createThemePalette, justifyRow, searchable selectOption, paste folding, Ct
     }
   }
 
-  // 6. Atrium prism emblem renders 5x10 half-block silhouette across all themes and plain/minimal modes.
+  // 6. Atrium prism emblem renders a 7x14 half-block silhouette across all themes and plain/minimal modes.
   {
     const plainRows = renderAtriumEmblem(createThemePalette(false))
     assert.deepEqual(plainRows, [
-      '   ▄██▄▄  ',
-      '▄█  ▄▄ ▀█▄',
-      '██ ████ ▄▄',
-      '▀█▄ ▀▀ ▄█▀',
-      '  ▀ ██▀▀  ',
+      '    ▄▄██▄▄    ',
+      ' ▄▄▄▀▀▀▀▀██▄▄ ',
+      ' ██▀  ▄▄  ▀█▀ ',
+      ' ██  ████  ▄▄ ',
+      ' ██▄ ▀██▀ ▄██ ',
+      ' ▀▀██ ▄▄▄██▀▀ ',
+      '      ██▀▀    ',
     ])
     for (const row of plainRows) {
-      assert.equal(visibleWidth(row), 10)
+      assert.equal(visibleWidth(row), 14)
       assert.equal(stripAnsi(row), row)
     }
 
     const minimalRows = renderAtriumEmblem(createThemePalette(true, 'minimal'))
-    assert.equal(minimalRows.length, 5)
+    assert.equal(minimalRows.length, 7)
     assert.equal(/\x1b\[48;/.test(minimalRows.join('\n')), false)
     for (let i = 0; i < minimalRows.length; i += 1) {
-      assert.equal(visibleWidth(minimalRows[i]!), 10)
+      assert.equal(visibleWidth(minimalRows[i]!), 14)
       assert.equal(stripAnsi(minimalRows[i]!), plainRows[i])
     }
 
     const maskShape = (row: string) => stripAnsi(row).replace(/[█▀▄]/g, '#')
     for (const themeId of CLI_THEME_IDS) {
       const themedRows = renderAtriumEmblem(createThemePalette(true, themeId))
-      assert.equal(themedRows.length, 5)
+      assert.equal(themedRows.length, 7)
       for (let i = 0; i < themedRows.length; i += 1) {
-        assert.equal(visibleWidth(themedRows[i]!), 10)
+        assert.equal(visibleWidth(themedRows[i]!), 14)
         assert.equal(maskShape(themedRows[i]!), maskShape(plainRows[i]!))
       }
     }

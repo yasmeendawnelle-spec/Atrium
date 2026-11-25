@@ -30,11 +30,15 @@ import {
   AGENT_MODES,
   CONTEXT_WINDOW_PRESETS,
   normalizeContextWindowTokens,
+  normalizeReasoningEffort,
+  REASONING_EFFORT_LEVELS,
   resolveEffectiveContextLimit,
 } from '../shared/types.ts'
+import { gradientText, motionEnabled, paintRgb, sampleStops, sparkFrame, ultraStops } from './fx.ts'
 import { createPalette, type CliPalette, type CliRenderer } from './render.ts'
 import type { CliRuntime } from './runtime.ts'
 import { selectOption, type SelectOption } from './select.ts'
+import { formatEffortScale, selectEffortSlider } from './slider.ts'
 import { formatCompactTokens, createSpinner, renderFramedCard, renderProgressBar } from './ui.ts'
 
 export type AskFn = (question: string, opts?: { secret?: boolean }) => Promise<string>
@@ -57,7 +61,7 @@ export interface EnvProviderCandidate {
   model: string
 }
 
-const EFFORT_LEVELS: readonly ReasoningEffort[] = ['auto', 'low', 'medium', 'high', 'xhigh']
+const EFFORT_LEVELS: readonly ReasoningEffort[] = REASONING_EFFORT_LEVELS
 
 export function detectEnvProviderCandidates(): EnvProviderCandidate[] {
   const candidates: EnvProviderCandidate[] = []
@@ -436,46 +440,83 @@ async function syncActiveProviderModels(runtime: CliRuntime, io: CommandIo, quer
   }
 }
 
-/** Handles `/effort [auto|low|medium|high|xhigh]`. */
+/** Handles `/effort [auto|low|medium|high|xhigh|max|ultracode]`; no argument opens the slider. */
 export async function handleEffortCommand(runtime: CliRuntime, arg: string, io: CommandIo): Promise<void> {
-  const cur = runtime.settings.get().reasoningEffort ?? 'auto'
-  if (!arg) {
+  const s = runtime.settings.get()
+  const cur = s.reasoningEffort ?? 'auto'
+  const ultracode = s.ultracode === true
+  const raw = arg.trim().toLowerCase()
+  if (!raw) {
+    const picked = io.isTty
+      ? await selectEffortSlider({ effort: cur, ultracode, palette: io.palette, stdin: io.stdin, stdout: io.stdout })
+      : null
     if (!io.isTty) {
-      io.stdout.write(`Current reasoning effort: ${cur} (choices: ${EFFORT_LEVELS.join(', ')})\n`)
+      io.stdout.write(`Reasoning effort: ${formatEffortScale(cur)}${ultracode ? ' · ultracode on' : ''}\n`)
       return
     }
-    const picked = await selectOption<ReasoningEffort>({
-      title: 'Reasoning effort',
-      options: EFFORT_LEVELS.map((lvl) => ({
-        value: lvl,
-        label: lvl,
-        hint:
-          lvl === 'auto'
-            ? 'Let model choose'
-            : lvl === 'low'
-              ? 'Fastest response'
-              : lvl === 'medium'
-                ? 'Balanced thinking'
-                : lvl === 'high'
-                  ? 'Deep reasoning'
-                  : 'Maximum thinking budget',
-      })),
-      initialIndex: Math.max(0, EFFORT_LEVELS.indexOf(cur)),
-      palette: io.palette,
-      stdin: io.stdin,
-      stdout: io.stdout,
-    })
-    if (picked) await runtime.settings.update({ reasoningEffort: picked })
+    if (picked) await runtime.settings.update({ reasoningEffort: picked.effort, ultracode: picked.ultracode })
     return
   }
 
-  const next = arg.trim().toLowerCase() as ReasoningEffort
-  if (!EFFORT_LEVELS.includes(next)) {
-    io.stdout.write(`Invalid effort "${arg}". Expected one of: ${EFFORT_LEVELS.join(', ')}.\n`)
+  // Claude-Code parity: `/effort ultracode` switches the Ultracode workflow on.
+  if (raw === 'ultracode') {
+    await handleUltracodeCommand(runtime, 'on', io)
+    return
+  }
+  const next = normalizeReasoningEffort(raw, 'auto')
+  if (next === 'auto' && raw !== 'auto') {
+    io.stdout.write(`Invalid effort "${arg}". Expected one of: ${EFFORT_LEVELS.join(', ')}, ultracode.\n`)
     return
   }
   await runtime.settings.update({ reasoningEffort: next })
-  io.stdout.write(`Reasoning effort set to ${io.palette.green(next)}.\n`)
+  io.stdout.write(`Reasoning effort set to ${io.palette.green(next)}  ${io.palette.subtle(formatEffortScale(next))}\n`)
+}
+
+/** Handles `/ultracode [on|off]`; no argument toggles. */
+export async function handleUltracodeCommand(runtime: CliRuntime, arg: string, io: CommandIo): Promise<void> {
+  const cur = runtime.settings.get().ultracode === true
+  const raw = arg.trim().toLowerCase()
+  let next: boolean
+  if (!raw || raw === 'toggle') next = !cur
+  else if (raw === 'on' || raw === 'true' || raw === '1') next = true
+  else if (raw === 'off' || raw === 'false' || raw === '0') next = false
+  else {
+    io.stdout.write(`Usage: /ultracode [on|off]\n`)
+    return
+  }
+  await runtime.settings.update({ ultracode: next })
+  if (!next) {
+    io.stdout.write(`Ultracode ${io.palette.muted('off')}.\n`)
+    return
+  }
+  const p = io.palette
+  const stops = ultraStops(p)
+  const title = 'ULTRACODE ON'
+  if (io.isTty && p.enabled && motionEnabled(io.stdout)) await playUltracodeIntro(io, title)
+  const effort = runtime.settings.get().reasoningEffort ?? 'auto'
+  const flow = ['plan', 'explore', 'build', 'verify']
+    .map((step, i, all) => paintRgb(step, sampleStops(stops, i / (all.length - 1)), p))
+    .join(` ${p.subtle('›')} `)
+  io.stdout.write(
+    `${gradientText(`✦ ${title}`, p, stops, { bold: true })}  ${p.muted(
+      `substantive tasks run as parallel subagent workflows (effort stays ${effort})`,
+    )}\n  ${flow}\n`,
+  )
+}
+
+/** A short shine across `✦ ULTRACODE ON` (about 0.7 s) before the final line is printed in its place. */
+async function playUltracodeIntro(io: CommandIo, title: string): Promise<void> {
+  const p = io.palette
+  const stops = ultraStops(p)
+  const frames = 18
+  for (let f = 0; f <= frames; f += 1) {
+    const shine = -3 + (f / frames) * (title.length + 6)
+    const spark = gradientText(sparkFrame(f), p, stops, { wrap: true, phase: f * 0.06 })
+    const text = gradientText(title, p, stops, { wrap: true, phase: f * 0.04, shine, bold: true })
+    io.stdout.write(`\r\x1b[2K${spark} ${text}`)
+    await new Promise((r) => setTimeout(r, 40))
+  }
+  io.stdout.write('\r\x1b[2K')
 }
 
 /** Handles interactive `/config` menu across CLI runtime settings. */
@@ -489,6 +530,7 @@ export async function handleConfigCommand(
   const printStatic = () => {
     io.stdout.write(`${io.palette.bold('Atrium Configuration')}\n`)
     io.stdout.write(`  reasoningEffort:  ${s.reasoningEffort ?? 'auto'}\n`)
+    io.stdout.write(`  ultracode:        ${s.ultracode === true ? 'on' : 'off'}\n`)
     io.stdout.write(`  agentMode:        ${s.agentMode ?? 'auto'}\n`)
     io.stdout.write(`  workScene:        ${s.workScene ?? 'code'}\n`)
     io.stdout.write(`  contextWindow:    ${s.contextWindowTokens ? formatCompactTokens(s.contextWindowTokens) : 'auto'}\n`)
@@ -518,7 +560,11 @@ export async function handleConfigCommand(
   const picked = await selectOption<ConfigKey>({
     title: 'Configure Atrium settings',
     options: [
-      { value: 'effort', label: 'Reasoning effort', hint: `currently: ${s.reasoningEffort ?? 'auto'}` },
+      {
+        value: 'effort',
+        label: 'Reasoning effort & Ultracode',
+        hint: `currently: ${s.reasoningEffort ?? 'auto'}${s.ultracode === true ? ' · ultracode' : ''}`,
+      },
       { value: 'mode', label: 'Permission mode', hint: `currently: ${s.agentMode ?? 'auto'}` },
       { value: 'scene', label: 'Work scene', hint: `currently: ${s.workScene ?? 'code'}` },
       {
@@ -1911,3 +1957,4 @@ Scans local external AI agent plugins/skills and optionally imports them into At
   )
   return 0
 }
+
