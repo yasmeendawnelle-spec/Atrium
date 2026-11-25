@@ -69,6 +69,17 @@ import type {
   WorkspaceChanges,
   WorkspaceFilePreview,
 } from './types.ts'
+import type {
+  FleetDiffResult,
+  FleetLaunchResult,
+  FleetTaskDraft,
+  FleetWorkerSnapshot,
+  PolicyDecision,
+  PolicyInspection,
+  PreviewEvent,
+  PreviewServerInfo,
+  ProjectPolicyConfig,
+} from './studio_features.ts'
 
 export interface ProviderTestResult {
   ok: boolean
@@ -198,6 +209,25 @@ export interface CoreMethods {
   'browser.open': (url: string, conversationId?: string) => BrowserSnapshot
   'browser.action': (action: BrowserActionInput, conversationId?: string) => BrowserSnapshot
   'browser.capture': (conversationId?: string) => BrowserSnapshot
+  'policy.inspect': (workspace?: string) => PolicyInspection
+  'policy.save': (workspace: string | undefined, scope: 'project' | 'local', config: ProjectPolicyConfig) => PolicyInspection
+  'policy.checkPath': (workspace: string | undefined, path: string, op: 'read' | 'write') => PolicyDecision
+  'preview.list': (conversationId?: string) => PreviewServerInfo[]
+  'preview.start': (opts: {
+    workspace?: string
+    command: string
+    conversationId?: string
+    url?: string
+    port?: number
+  }) => { server: PreviewServerInfo; ready: boolean; logTail: string }
+  'preview.logs': (serverId: string) => { server: PreviewServerInfo; logs: string } | null
+  'preview.stop': (serverId: string) => boolean
+  'fleet.list': (baseWorkspace?: string) => FleetWorkerSnapshot[]
+  'fleet.launch': (opts: { baseWorkspace?: string; tasks: FleetTaskDraft[] }) => FleetLaunchResult
+  'fleet.diff': (conversationId: string) => FleetDiffResult
+  'fleet.merge': (conversationId: string, opts?: { commitMessage?: string; cleanupWorktree?: boolean }) => WorktreeMergeResult
+  'fleet.discard': (conversationId: string) => void
+  'fleet.stopAll': (baseWorkspace?: string) => number
   'account.state': () => RelayPulseAccountState
   'account.refresh': () => RelayPulseAccountState
   'account.setOrigin': (
@@ -354,6 +384,19 @@ export const CORE_METHODS: readonly CoreMethod[] = [
   'browser.open',
   'browser.action',
   'browser.capture',
+  'policy.inspect',
+  'policy.save',
+  'policy.checkPath',
+  'preview.list',
+  'preview.start',
+  'preview.logs',
+  'preview.stop',
+  'fleet.list',
+  'fleet.launch',
+  'fleet.diff',
+  'fleet.merge',
+  'fleet.discard',
+  'fleet.stopAll',
   'account.state',
   'account.refresh',
   'account.setOrigin',
@@ -410,6 +453,7 @@ export type CoreEvent =
   | { channel: 'memory'; payload: MemoryItem[] }
   | { channel: 'knowledge'; payload: KnowledgeStats }
   | { channel: 'browser'; payload: BrowserSnapshot }
+  | { channel: 'preview'; payload: PreviewEvent }
   | { channel: 'account'; payload: RelayPulseAccountState }
   | { channel: 'app'; payload: { action: 'open_chat'; conversationId: string } | { action: 'focus_quick_input' } }
   /** Sent by main when application auto-update state changes. */

@@ -26,6 +26,15 @@ import { prewarmPtyHelper } from './pty.ts'
 import { detectSandboxCapabilities } from './sandbox.ts'
 import { hasSpeechApiKey, saveSpeechApiKey, transcribeSpeech } from './speech.ts'
 import { TerminalManager } from './terminal.ts'
+import {
+  evaluateCommandPolicy,
+  evaluateFileReadPolicy,
+  evaluateFileWritePolicy,
+  inspectWorkspacePolicy,
+  saveWorkspacePolicy,
+} from './policy.ts'
+import { PreviewServerManager } from './preview.ts'
+import { WorktreeFleetManager } from './fleet.ts'
 import type { BrowserHostBridge } from './tools/browser_tools.ts'
 import type { ComputerHostBridge } from './tools/computer_tools.ts'
 import { chat, endpointFor, fetchProviderModels, testConnection } from './providers/index.ts'
@@ -42,7 +51,6 @@ import {
   getGitRepoStatus,
   isLinkedWorktree,
   listGitBranches,
-  mergeWorktreeToBase,
   pushGitBranch,
   removeGitWorktree,
   stageGitFiles,
@@ -152,6 +160,9 @@ async function main(): Promise<void> {
     getDefaultWorkspace: () => settings.get().workspace,
     dataDir,
   })
+  const previews = new PreviewServerManager({
+    onChange: (payload) => emit({ channel: 'preview', payload }),
+  })
   void prewarmPtyHelper(dataDir).catch(() => undefined)
   const memory = new MemoryStore(dir, (items) => emit({ channel: 'memory', payload: items }))
   const knowledge = new KnowledgeBaseManager(dataDir, (stats) => emit({ channel: 'knowledge', payload: stats }))
@@ -212,6 +223,7 @@ async function main(): Promise<void> {
     knowledge,
     browser: browserBridge,
     computer: computerBridge,
+    preview: previews,
     emit: (payload) => {
       emit({ channel: 'agent', payload })
       if (payload.type === 'message_saved' && payload.message.role === 'assistant' && payload.message.usage) {
@@ -235,6 +247,24 @@ async function main(): Promise<void> {
     systemPrompt,
   })
   emergencyStop = () => agent.stopAll()
+
+  const fleet = new WorktreeFleetManager({
+    chats,
+    agent,
+    settings,
+    checkpoints,
+    previews,
+    dataDir,
+    onChatsChanged: () => emit({ channel: 'chats', payload: chats.list() }),
+    emitAgent: (payload) => emit({ channel: 'agent', payload }),
+    closeBrowser: async (cid) => {
+      await callHost('browser.action', { kind: 'close', conversationId: cid }, cid)
+    },
+    beforeSend: async () => {
+      requireAccount()
+      await syncRelayPulseRoute()
+    },
+  })
 
   const automations = new AutomationManager({
     dir,
@@ -405,6 +435,7 @@ async function main(): Promise<void> {
     'chats.remove': async (id) => {
       agent.clearQueue(id)
       agent.stop(id)
+      await previews.stopForConversation(id).catch(() => undefined)
       const conv = await chats.get(id)
       await chats.remove(id)
       await checkpoints.deleteChat(id).catch(() => undefined)
@@ -561,34 +592,7 @@ async function main(): Promise<void> {
     },
     'workspace.suggestCommitMessage': (workspace, conversationId) =>
       suggestCommitMessage(settings, chats, checkpoints, workspace, conversationId),
-    'workspace.gitMergeWorktree': async (conversationId, opts) => {
-      if (agent.busy(conversationId)) throw new Error('Stop the active turn before merging the worktree.')
-      const conv = await chats.get(conversationId)
-      if (!conv?.worktreeBaseWorkspace || !conv.workspace || !conv.worktreeBranch) {
-        throw new Error('This conversation is not running in an isolated Git worktree.')
-      }
-      const res = await mergeWorktreeToBase({
-        baseWorkspace: conv.worktreeBaseWorkspace,
-        worktreePath: conv.workspace,
-        branch: conv.worktreeBranch,
-        baseBranch: conv.worktreeBaseBranch,
-        commitMessage: opts?.commitMessage,
-        cleanupWorktree: opts?.cleanupWorktree,
-      })
-      invalidateWorkspaceFilesCache(conv.worktreeBaseWorkspace)
-      invalidateWorkspaceFilesCache(conv.workspace)
-      if (res.cleanedUp) {
-        conv.workspace = res.baseWorkspace
-        delete conv.worktreeBaseWorkspace
-        delete conv.worktreeBranch
-        delete conv.worktreeBaseBranch
-        await checkpoints.deleteChat(conversationId).catch(() => undefined)
-        await chats.save(conv)
-        emit({ channel: 'chats', payload: chats.list() })
-        emit({ channel: 'agent', payload: { type: 'conversation_sync', conversation: conv } })
-      }
-      return res
-    },
+    'workspace.gitMergeWorktree': (conversationId, opts) => fleet.merge(conversationId, opts),
     'workspace.githubIssues': (workspace, query) => fetchGitHubIssues(workspace ?? settings.get().workspace, query),
     'workspace.saveArtifact': async (path, content, workspace) => {
       const savedPath = await saveArtifactFile(workspace ?? settings.get().workspace, path, content)
@@ -631,6 +635,44 @@ async function main(): Promise<void> {
     'browser.open': async (url, conversationId) => browserBridge.open(url, conversationId),
     'browser.action': async (action, conversationId) => browserBridge.action(action, conversationId),
     'browser.capture': async (conversationId) => browserBridge.capture(conversationId),
+    'policy.inspect': (workspace) => inspectWorkspacePolicy(workspace ?? settings.get().workspace),
+    'policy.save': (workspace, scope, config) => saveWorkspacePolicy(workspace ?? settings.get().workspace, scope, config),
+    'policy.checkPath': (workspace, targetPath, op) => {
+      const ws = workspace ?? settings.get().workspace
+      return op === 'write' ? evaluateFileWritePolicy(ws, targetPath) : evaluateFileReadPolicy(ws, targetPath)
+    },
+    'preview.list': (conversationId) => previews.list(conversationId),
+    'preview.start': async (opts) => {
+      const ws = opts.workspace ?? settings.get().workspace
+      if (!ws) throw new Error('No workspace folder is set.')
+      const cmdDecision = await evaluateCommandPolicy(ws, opts.command)
+      if (!cmdDecision.allowed) {
+        throw new Error(cmdDecision.reason ?? 'Blocked by project command security policy.')
+      }
+      const res = await previews.start({
+        workspace: ws,
+        command: opts.command,
+        conversationId: opts.conversationId,
+        url: opts.url,
+        port: opts.port,
+      })
+      if (res.ready && res.server.url) {
+        void browserBridge.open(res.server.url, opts.conversationId).catch(() => undefined)
+      }
+      return res
+    },
+    'preview.logs': (serverId) => previews.logs({ serverId }),
+    'preview.stop': (serverId) => previews.stop(serverId),
+    'fleet.list': (baseWorkspace) => fleet.list(baseWorkspace),
+    'fleet.launch': (opts) =>
+      fleet.launch({
+        baseWorkspace: opts.baseWorkspace ?? settings.get().workspace ?? '',
+        tasks: opts.tasks,
+      }),
+    'fleet.diff': (conversationId) => fleet.inspectDiff(conversationId),
+    'fleet.merge': (conversationId, opts) => fleet.merge(conversationId, opts),
+    'fleet.discard': (conversationId) => fleet.discard(conversationId),
+    'fleet.stopAll': (baseWorkspace) => fleet.stopAll(baseWorkspace),
     'stats.usage': () => chats.summarizeUsage(),
   }
   const table = handlers as unknown as Record<string, Handler>
@@ -661,6 +703,7 @@ async function main(): Promise<void> {
     if (stopping) return
     stopping = true
     automations.shutdown()
+    previews.shutdown()
     terminal.shutdown()
     void mcp.shutdown().finally(() => process.exit(0))
   }

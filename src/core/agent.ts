@@ -54,6 +54,14 @@ import type { PluginManager } from './plugins.ts'
 import type { SettingsStore } from './settings.ts'
 import type { TerminalManager } from './terminal.ts'
 import { HookEngine, loadWorkspaceHookSource, type HookRunEventNotice, type PluginHookSource } from './hooks.ts'
+import {
+  evaluateCommandPolicy,
+  formatPolicyPromptNote,
+  inspectWorkspacePolicy,
+  resolveEffectiveSandbox,
+} from './policy.ts'
+import type { PreviewServerManager } from './preview.ts'
+import { PREVIEW_TOOLS, runPreviewTool } from './tools/preview_tools.ts'
 
 const MAX_ROUNDS = 40
 const ULTRACODE_MIN_ROUNDS = 60
@@ -92,7 +100,7 @@ export function buildAlwaysAllowRule(
   kind: ApprovalKind,
   serverId?: string,
 ): { rule: string; label: string } {
-  if (call.name === 'run_command' || call.name === 'start_background') {
+  if (call.name === 'run_command' || call.name === 'start_background' || call.name === 'preview_start') {
     const raw = String(call.input.command ?? '').replace(/\s+/g, ' ').trim()
     if (raw && !SHELL_CHAIN_RE.test(raw)) {
       const tokens = raw.split(' ')
@@ -122,7 +130,7 @@ export function matchesAllowedRules(
   rules: string[],
 ): boolean {
   if (rules.length === 0) return false
-  if (call.name === 'run_command' || call.name === 'start_background') {
+  if (call.name === 'run_command' || call.name === 'start_background' || call.name === 'preview_start') {
     const raw = String(call.input.command ?? '').replace(/\s+/g, ' ').trim()
     if (!raw) return false
     for (const rule of rules) {
@@ -206,6 +214,7 @@ export interface LoopDeps {
   knowledge?: KnowledgeBaseManager
   browser?: BrowserHostBridge
   computer?: ComputerHostBridge
+  preview?: PreviewServerManager
   /** When true (e.g. background scheduled tasks), any action requiring interactive approval is safely declined instead of hanging. */
   unattended?: boolean
   compactThresholdTokens?: number
@@ -271,6 +280,18 @@ export class AgentLoop {
 
   busy(conversationId: string): boolean {
     return this.running.has(conversationId)
+  }
+
+  runningConversationIds(): string[] {
+    return [...this.running.keys()]
+  }
+
+  pendingApprovalsFor(conversationId: string): number {
+    let count = 0
+    for (const entry of this.approvals.values()) {
+      if (entry.request.conversationId === conversationId) count++
+    }
+    return count
   }
 
   stop(conversationId: string): void {
@@ -542,7 +563,12 @@ export class AgentLoop {
     const workspace = conversation.workspace ?? appSettings.workspace
     if (!conversation.workspace && workspace) conversation.workspace = workspace
     conversation.providerId = provider.id
-    const projectNotes = await loadProjectInstructions(workspace)
+    const [rawProjectNotes, policyInspection] = await Promise.all([
+      loadProjectInstructions(workspace),
+      inspectWorkspacePolicy(workspace),
+    ])
+    const policyNote = formatPolicyPromptNote(policyInspection)
+    const projectNotes = [rawProjectNotes, policyNote].filter(Boolean).join('\n\n')
     const mode: AgentMode = normalizeAgentMode(this.deps.forcedMode ?? appSettings.agentMode, 'manual')
     const workScene: WorkScene = appSettings.workScene === 'work' ? 'work' : 'code'
     const skillsSummary = this.deps.skills ? await this.deps.skills.formatAvailableSkillsPrompt(workspace) : ''
@@ -868,9 +894,14 @@ export class AgentLoop {
       if (mode === 'plan') {
         defs.push(...FILE_TOOLS.filter((t) => READ_ONLY_FILE_TOOLS.has(t.name)))
         if (this.deps.terminal) defs.push(BG_TOOLS[1]!)
+        if (this.deps.preview) {
+          const logsTool = PREVIEW_TOOLS.find((t) => t.name === 'preview_logs')
+          if (logsTool) defs.push(logsTool)
+        }
       } else {
         defs.push(...FILE_TOOLS, SHELL_TOOL)
         if (this.deps.terminal) defs.push(...BG_TOOLS)
+        if (this.deps.preview) defs.push(...PREVIEW_TOOLS)
       }
     }
     if (this.deps.skills) defs.push(LOAD_SKILL_TOOL)
@@ -913,6 +944,7 @@ export class AgentLoop {
       name === 'load_skill' ||
       name === 'run_subagent' ||
       name === 'read_background' ||
+      name === 'preview_logs' ||
       name === 'search_memory' ||
       name === 'knowledge_search' ||
       name === 'mcp_list_resources' ||
@@ -1182,8 +1214,46 @@ export class AgentLoop {
         this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
         return runStopBackground(this.deps.terminal, call.input)
       }
-      if (!workspace && (FILE_TOOLS.some((t) => t.name === call.name) || call.name === 'run_command' || call.name === 'start_background')) {
+      if (!workspace && (FILE_TOOLS.some((t) => t.name === call.name) || call.name === 'run_command' || call.name === 'start_background' || PREVIEW_TOOLS.some((t) => t.name === call.name))) {
         return { output: 'No workspace folder is set. Ask the user to pick one in Settings.', isError: true }
+      }
+      if (call.name === 'preview_logs') {
+        if (!this.deps.preview) return { output: 'Preview server manager is unavailable.', isError: true }
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        const browserConvId = this.deps.checkpointConversationId ?? conversation.id
+        return runPreviewTool(this.deps.preview, this.deps.browser, call.name, call.input, {
+          workspace: workspace!,
+          conversationId: browserConvId,
+          signal,
+        })
+      }
+      if (call.name === 'preview_stop') {
+        if (!this.deps.preview) return { output: 'Preview server manager is unavailable.', isError: true }
+        const allowed = await this.ask(conversation, call, serverId, signal, mode, undefined, workspace)
+        if (!allowed) return { output: 'The user denied this action.', isError: true }
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        const browserConvId = this.deps.checkpointConversationId ?? conversation.id
+        return runPreviewTool(this.deps.preview, this.deps.browser, call.name, call.input, {
+          workspace: workspace!,
+          conversationId: browserConvId,
+          signal,
+        })
+      }
+      if (call.name === 'preview_start') {
+        if (!this.deps.preview) return { output: 'Preview server manager is unavailable.', isError: true }
+        const cmdDecision = await evaluateCommandPolicy(workspace!, String(call.input.command ?? ''))
+        if (!cmdDecision.allowed) {
+          return { output: cmdDecision.reason ?? 'Blocked by project command security policy.', isError: true }
+        }
+        const allowed = await this.ask(conversation, call, serverId, signal, mode, undefined, workspace)
+        if (!allowed) return { output: 'The user denied this action.', isError: true }
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        const browserConvId = this.deps.checkpointConversationId ?? conversation.id
+        return runPreviewTool(this.deps.preview, this.deps.browser, call.name, call.input, {
+          workspace: workspace!,
+          conversationId: browserConvId,
+          signal,
+        })
       }
       if (call.name === 'edit_file') {
         const prepared = await prepareEdit(workspace!, call.input)
@@ -1236,6 +1306,12 @@ export class AgentLoop {
         this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
         return runWebTool(call.name, call.input, { signal })
       }
+      if (call.name === 'run_command' || call.name === 'start_background') {
+        const cmdDecision = await evaluateCommandPolicy(workspace!, String(call.input.command ?? ''))
+        if (!cmdDecision.allowed) {
+          return { output: cmdDecision.reason ?? 'Blocked by project command security policy.', isError: true }
+        }
+      }
       if (call.name === 'run_command' || call.name === 'start_background' || serverId) {
         const allowed = await this.ask(conversation, call, serverId, signal, mode, undefined, workspace)
         if (!allowed) return { output: 'The user denied this action.', isError: true }
@@ -1248,6 +1324,8 @@ export class AgentLoop {
       if (call.name === 'run_command') {
         const seconds = Number(call.input.timeoutSeconds ?? 120)
         const s = this.deps.settings.get()
+        const policy = await inspectWorkspacePolicy(workspace!)
+        const effSandbox = resolveEffectiveSandbox(s.shellSandbox, s.sandboxAllowNetwork, policy)
         return runCommand(
           workspace!,
           String(call.input.command ?? ''),
@@ -1262,8 +1340,8 @@ export class AgentLoop {
               output: liveOutput,
             }),
           {
-            sandboxMode: s.shellSandbox,
-            allowNetwork: s.sandboxAllowNetwork,
+            sandboxMode: effSandbox.sandboxMode,
+            allowNetwork: effSandbox.allowNetwork,
             dataDir: this.deps.dataDir,
           },
         )
@@ -1459,7 +1537,11 @@ export class AgentLoop {
         ? 'edit'
         : call.name === 'write_file'
           ? 'write'
-          : call.name === 'run_command' || call.name === 'start_background' || call.name === 'stop_background'
+          : call.name === 'run_command' ||
+              call.name === 'start_background' ||
+              call.name === 'stop_background' ||
+              call.name === 'preview_start' ||
+              call.name === 'preview_stop'
             ? 'shell'
             : call.name.startsWith('desktop_')
               ? 'computer'
@@ -1550,7 +1632,8 @@ function summaryFor(call: ToolCall): string {
   if (call.name === 'edit_file') return `Edit ${String(call.input.path ?? '')}`
   if (call.name === 'write_file') return `Write ${String(call.input.path ?? '')}`
   if (call.name === 'apply_patch') return 'Apply multi-file patch'
-  if (call.name === 'run_command' || call.name === 'start_background') return String(call.input.command ?? '')
+  if (call.name === 'run_command' || call.name === 'start_background' || call.name === 'preview_start') return String(call.input.command ?? '')
+  if (call.name === 'preview_stop') return `Stop preview server ${String(call.input.serverId ?? '')}`.trim()
   if (call.name === 'stop_background') return `Stop background session ${String(call.input.sessionId ?? '')}`
   if (call.name === 'browser_click') {
     if (call.input.ref || call.input.selector) return `Click browser element ${String(call.input.ref ?? call.input.selector ?? '')}`
@@ -1571,7 +1654,7 @@ function summaryFor(call: ToolCall): string {
 
 function detailFor(call: ToolCall): string | undefined {
   if (call.name === 'write_file') return String(call.input.content ?? '')
-  if (call.name === 'run_command' || call.name === 'start_background') return undefined
+  if (call.name === 'run_command' || call.name === 'start_background' || call.name === 'preview_start') return undefined
   return JSON.stringify(call.input, null, 2)
 }
 
