@@ -6,9 +6,11 @@ import { formatHelpText, parseCliArgs } from './args.ts'
 import {
   expandFileMentions,
   runDoctorCheck,
+  runFleetSubcommand,
   runImportSubcommand,
   runMcpSubcommand,
   runPluginSubcommand,
+  runPolicySubcommand,
 } from './commands.ts'
 import { createPalette, createRenderer } from './render.ts'
 import { runInteractiveRepl, runLoginFlow } from './repl.ts'
@@ -329,6 +331,12 @@ Commands:
 
       case 'import':
         return runImportSubcommand(runtime, args.subArgs, args.json, stdout)
+
+      case 'policy':
+        return runPolicySubcommand(runtime, args.subArgs, args.json, stdout, stderr)
+
+      case 'fleet':
+        return runFleetSubcommand(runtime, args.subArgs, args.json, stdout, stderr)
 
       case 'chat': {
         await runtime.applyOverrides({

@@ -562,6 +562,9 @@ export function renderHelpCard(palette: CliPalette, cols?: number): string {
     cmd('/status', 'Active model & MCP card'),
     cmd('/config', 'Runtime safety settings'),
     cmd('/permissions', 'View/clear allow rules'),
+    cmd('/policy', 'Project policy & secret guard'),
+    cmd('/fleet', 'Parallel worktree fleet'),
+    cmd('/preview', 'Managed dev preview server'),
   ]
 
   const keysSection = [

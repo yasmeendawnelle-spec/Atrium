@@ -4,6 +4,13 @@ import { access, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fetchProviderModels, testConnection } from '../core/providers/index.ts'
+import {
+  evaluateCommandPolicy,
+  evaluateFileReadPolicy,
+  evaluateFileWritePolicy,
+  inspectWorkspacePolicy,
+  saveWorkspacePolicy,
+} from '../core/policy.ts'
 import { readWorkspacePreview } from '../core/tools/files.ts'
 import {
   checkoutGitBranch,
@@ -24,6 +31,7 @@ import type {
   ReasoningEffort,
   WorkScene,
 } from '../shared/types.ts'
+import type { FleetWorkerSnapshot, ProjectPolicyConfig } from '../shared/studio_features.ts'
 
 const execFileAsync = promisify(execFile)
 import {
@@ -35,7 +43,7 @@ import {
   resolveEffectiveContextLimit,
 } from '../shared/types.ts'
 import { gradientText, motionEnabled, paintRgb, sampleStops, sparkFrame, ultraStops } from './fx.ts'
-import { createPalette, type CliPalette, type CliRenderer } from './render.ts'
+import { createPalette, formatColoredDiff, type CliPalette, type CliRenderer } from './render.ts'
 import type { CliRuntime } from './runtime.ts'
 import { selectOption, type SelectOption } from './select.ts'
 import { formatEffortScale, selectEffortSlider } from './slider.ts'
@@ -1958,3 +1966,593 @@ Scans local external AI agent plugins/skills and optionally imports them into At
   return 0
 }
 
+// ---- Security Policy (`/policy`, `atrium policy`), Parallel Worktree Fleet (`/fleet`, `atrium fleet`), and Preview (`/preview`) ----
+
+function splitCliTokens(raw: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i]!
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < raw.length) {
+        current += raw[++i]!
+      } else if (ch === quote) {
+        quote = null
+      } else {
+        current += ch
+      }
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += ch
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+function makeDefaultIo(stdout: NodeJS.WritableStream, stderr: NodeJS.WritableStream): CommandIo {
+  const isTty = Boolean((stdout as NodeJS.WriteStream).isTTY)
+  return {
+    stdin: process.stdin,
+    stdout,
+    stderr,
+    palette: createPalette(!process.env.NO_COLOR && isTty),
+    isTty,
+  }
+}
+
+function resolvePolicyWorkspace(runtime: CliRuntime, conversation?: Conversation): string | undefined {
+  return conversation?.worktreeBaseWorkspace ?? conversation?.workspace ?? runtime.workspace ?? runtime.settings.get().workspace
+}
+
+function appendUniqueRule(existing: string[] | undefined, rule: string): string[] {
+  const list = existing ? [...existing] : []
+  if (!list.includes(rule)) list.push(rule)
+  return list
+}
+
+function formatPolicyUsage(): string {
+  return `Usage:
+  policy status                     Show active security policy rules & shield status
+  policy check <path> [read|write]  Test whether reading/writing a path is allowed
+  policy check-cmd <command...>     Test whether a shell command is allowed
+  policy init [project|local]       Create .atrium/policy.json or .atrium/policy.local.json
+  policy shield <on|off> [--local]  Toggle built-in sensitive-file shield
+  policy deny-read <glob> [--local] Append a denyRead glob rule
+  policy allow-read <glob> [--local] Append an allowRead glob rule
+  policy deny-write <glob> [--local] Append a denyWrite glob rule
+  policy allow-write <glob> [--local] Append an allowWrite glob rule
+  policy deny-cmd <rule> [--local]  Append a denyCommands rule
+  policy allow-cmd <rule> [--local] Append an allowCommands rule
+`
+}
+
+async function executePolicyAction(
+  runtime: CliRuntime,
+  workspace: string | undefined,
+  tokens: readonly string[],
+  json: boolean,
+  io: CommandIo,
+): Promise<number> {
+  const { stdout, stderr, palette, isTty } = io
+  const sub = tokens[0]?.toLowerCase() || 'status'
+
+  if (sub === 'help' || sub === '--help' || sub === '-h') {
+    stdout.write(formatPolicyUsage())
+    return 0
+  }
+
+  if (sub === 'status' || sub === 'show') {
+    const info = await inspectWorkspacePolicy(workspace)
+    if (json) {
+      stdout.write(`${JSON.stringify(info, null, 2)}\n`)
+      return 0
+    }
+    const shieldText = info.protectSensitiveFiles
+      ? palette.green('Active')
+      : palette.yellow('Disabled')
+    const listText = (arr: string[]) => (arr.length ? arr.join(', ') : palette.subtle('(none)'))
+    const lines = [
+      `${palette.muted('Workspace:')}     ${workspace ?? palette.subtle('(none)')}`,
+      `${palette.muted('Shield:')}        ${shieldText} (${info.activeRuleCount} active rules)`,
+      `${palette.muted('Project file:')}  ${info.projectFile.path} [${info.projectFile.exists ? (info.projectFile.parseError ? palette.red(`error: ${info.projectFile.parseError}`) : palette.green('loaded')) : palette.subtle('not created')}]`,
+      `${palette.muted('Local file:')}    ${info.localFile.path} [${info.localFile.exists ? (info.localFile.parseError ? palette.red(`error: ${info.localFile.parseError}`) : palette.green('loaded')) : palette.subtle('not created')}]`,
+      `${palette.muted('denyRead:')}      ${listText(info.effective.denyRead)}`,
+      `${palette.muted('allowRead:')}     ${listText(info.effective.allowRead)}`,
+      `${palette.muted('denyWrite:')}     ${listText(info.effective.denyWrite)}`,
+      `${palette.muted('allowWrite:')}    ${listText(info.effective.allowWrite)}`,
+      `${palette.muted('denyCommands:')}  ${listText(info.effective.denyCommands)}`,
+      `${palette.muted('allowCommands:')} ${listText(info.effective.allowCommands)}`,
+      `${palette.muted('Sandbox floor:')} ${info.effective.sandboxMode ?? palette.subtle('(inherit)')} · net: ${info.effective.allowNetwork === false ? palette.yellow('blocked') : 'inherit'}`,
+    ]
+    if (isTty) {
+      const cols = (stdout as NodeJS.WriteStream).columns || 90
+      stdout.write(
+        `\n${renderFramedCard({ title: 'Project Security Policy', badge: info.protectSensitiveFiles ? 'shield:on' : 'shield:off', lines, cols, maxWidth: 96, palette })}\n\n`,
+      )
+    } else {
+      stdout.write(`${lines.join('\n')}\n`)
+    }
+    return 0
+  }
+
+  if (sub === 'check' || sub === 'test') {
+    const targetPath = tokens[1]
+    if (!targetPath) {
+      stderr.write('Usage: policy check <path> [read|write]\n')
+      return 2
+    }
+    const rawOp = (tokens[2] ?? 'read').toLowerCase()
+    const op = rawOp === 'write' ? 'write' : 'read'
+    const decision = op === 'write'
+      ? await evaluateFileWritePolicy(workspace, targetPath)
+      : await evaluateFileReadPolicy(workspace, targetPath)
+    if (json) {
+      stdout.write(`${JSON.stringify({ path: targetPath, operation: op, ...decision }, null, 2)}\n`)
+      return 0
+    }
+    const verdict = decision.allowed ? palette.green('ALLOWED') : palette.red('BLOCKED')
+    const detail = decision.reason ?? (decision.matchedRule ? `${decision.source ?? 'default'}: ${decision.matchedRule}` : 'No blocking rules matched.')
+    stdout.write(`${verdict} [${op}] ${targetPath} — ${detail}\n`)
+    return 0
+  }
+
+  if (sub === 'check-cmd' || sub === 'test-cmd') {
+    const cmdTokens = tokens.slice(1).filter((t) => t !== '--')
+    const command = cmdTokens.join(' ').trim()
+    if (!command) {
+      stderr.write('Usage: policy check-cmd <command...>\n')
+      return 2
+    }
+    const decision = await evaluateCommandPolicy(workspace, command)
+    if (json) {
+      stdout.write(`${JSON.stringify({ command, ...decision }, null, 2)}\n`)
+      return 0
+    }
+    const verdict = decision.allowed ? palette.green('ALLOWED') : palette.red('BLOCKED')
+    const detail = decision.reason ?? (decision.matchedRule ? `${decision.source ?? 'default'}: ${decision.matchedRule}` : 'Command allowed.')
+    stdout.write(`${verdict} [cmd] ${command} — ${detail}\n`)
+    return 0
+  }
+
+  if (!workspace) {
+    stderr.write('No active workspace folder. Switch to a workspace via -C or /cwd first.\n')
+    return 1
+  }
+
+  const useLocal = tokens.includes('--local')
+  const scope: 'project' | 'local' = useLocal ? 'local' : 'project'
+  const current = await inspectWorkspacePolicy(workspace)
+  const baseConfig: ProjectPolicyConfig = structuredClone(
+    scope === 'local' ? current.localConfig : current.projectConfig,
+  )
+
+  if (sub === 'init') {
+    const argScope = tokens[1]?.toLowerCase() === 'local' || useLocal ? 'local' : 'project'
+    const seed: ProjectPolicyConfig =
+      argScope === 'local'
+        ? { ...current.localConfig }
+        : { protectSensitiveFiles: current.projectConfig.protectSensitiveFiles ?? true, ...current.projectConfig }
+    const saved = await saveWorkspacePolicy(workspace, argScope, seed)
+    const targetPath = argScope === 'local' ? saved.localFile.path : saved.projectFile.path
+    if (json) stdout.write(`${JSON.stringify(saved, null, 2)}\n`)
+    else stdout.write(`Initialized ${argScope} security policy -> ${targetPath}\n`)
+    return 0
+  }
+
+  if (sub === 'shield') {
+    const val = tokens.find((t, idx) => idx > 0 && t !== '--local')?.toLowerCase()
+    if (val !== 'on' && val !== 'off') {
+      stderr.write('Usage: policy shield <on|off> [--local]\n')
+      return 2
+    }
+    baseConfig.protectSensitiveFiles = val === 'on'
+    const saved = await saveWorkspacePolicy(workspace, scope, baseConfig)
+    if (json) stdout.write(`${JSON.stringify(saved, null, 2)}\n`)
+    else stdout.write(`Sensitive-file shield set to ${val} in ${scope === 'local' ? saved.localFile.path : saved.projectFile.path}.\n`)
+    return 0
+  }
+
+  const ruleMap: Record<string, keyof Pick<ProjectPolicyConfig, 'denyRead' | 'allowRead' | 'denyWrite' | 'allowWrite' | 'denyCommands' | 'allowCommands'>> = {
+    'deny-read': 'denyRead',
+    'allow-read': 'allowRead',
+    'deny-write': 'denyWrite',
+    'allow-write': 'allowWrite',
+    'deny-cmd': 'denyCommands',
+    'allow-cmd': 'allowCommands',
+  }
+  const field = ruleMap[sub]
+  if (field) {
+    const rule = tokens.slice(1).filter((t) => t !== '--local').join(' ').trim()
+    if (!rule) {
+      stderr.write(`Usage: policy ${sub} <pattern> [--local]\n`)
+      return 2
+    }
+    baseConfig[field] = appendUniqueRule(baseConfig[field], rule)
+    const saved = await saveWorkspacePolicy(workspace, scope, baseConfig)
+    if (json) stdout.write(`${JSON.stringify(saved, null, 2)}\n`)
+    else stdout.write(`Added ${field} rule "${rule}" to ${scope === 'local' ? saved.localFile.path : saved.projectFile.path}.\n`)
+    return 0
+  }
+
+  stderr.write(`Unknown policy subcommand "${sub}". Run "policy help" for usage.\n`)
+  return 2
+}
+
+export async function handlePolicyCommand(
+  runtime: CliRuntime,
+  conversation: Conversation,
+  arg: string,
+  io: CommandIo,
+): Promise<void> {
+  const ws = resolvePolicyWorkspace(runtime, conversation)
+  const tokens = splitCliTokens(arg)
+  await executePolicyAction(runtime, ws, tokens, false, io)
+}
+
+export async function runPolicySubcommand(
+  runtime: CliRuntime,
+  subArgs: readonly string[],
+  json: boolean,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  const io = makeDefaultIo(stdout, stderr)
+  return executePolicyAction(runtime, resolvePolicyWorkspace(runtime), subArgs, json, io)
+}
+
+function resolveFleetTarget(workers: FleetWorkerSnapshot[], raw: string | undefined): FleetWorkerSnapshot | null {
+  const clean = (raw ?? '').trim()
+  if (!clean) return null
+  const num = Number(clean)
+  if (Number.isInteger(num) && num >= 1 && num <= workers.length) {
+    return workers[num - 1] ?? null
+  }
+  return (
+    workers.find((w) => w.conversationId === clean || w.conversationId.startsWith(clean)) ??
+    workers.find((w) => w.branch === clean || w.branch.replace(/^atrium\//, '') === clean) ??
+    null
+  )
+}
+
+function formatFleetUsage(): string {
+  return `Usage:
+  fleet list                        List isolated worktree workers & diff stats
+  fleet launch <task1> [;; task2]   Create isolated worktrees and run tasks in parallel
+  fleet diff <idx|id|branch>        Show changed files & unified diffs for a worker
+  fleet open <idx|id|branch>        Switch active CLI session to a worktree chat (REPL)
+  fleet merge <idx|id|branch> [--keep] Merge worktree branch into base branch cleanly
+  fleet discard <idx|id|branch>     Stop worker and delete its worktree & branch
+  fleet stop [idx|id|all]           Stop running worktree task(s)
+`
+}
+
+async function executeFleetAction(
+  runtime: CliRuntime,
+  workspace: string | undefined,
+  currentConversation: Conversation | undefined,
+  tokens: readonly string[],
+  opts: {
+    json: boolean
+    interactive: boolean
+    io: CommandIo
+    onSwitchChat?: (conv: Conversation) => Promise<void> | void
+  },
+): Promise<number> {
+  const { stdout, stderr, palette, isTty } = opts.io
+  const sub = tokens[0]?.toLowerCase() || 'list'
+
+  if (sub === 'help' || sub === '--help' || sub === '-h') {
+    stdout.write(formatFleetUsage())
+    return 0
+  }
+
+  if (sub === 'list' || sub === 'ls') {
+    const workers = await runtime.fleet.list(workspace)
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(workers, null, 2)}\n`)
+      return 0
+    }
+    if (workers.length === 0) {
+      stdout.write('No active isolated worktrees found for this workspace.\n')
+      return 0
+    }
+    const lines = workers.map((w, idx) => {
+      const badge =
+        w.status === 'running'
+          ? palette.accent('running')
+          : w.status === 'waiting_approval'
+            ? palette.yellow('approval')
+            : w.status === 'error'
+              ? palette.red('error')
+              : palette.green('ready')
+      const diffPart = `${w.changedFiles} file(s) ${palette.green(`+${w.additions}`)}/${palette.red(`-${w.deletions}`)}`
+      const branchPart = `${w.branch}${w.baseBranch ? ` -> ${w.baseBranch}` : ''}`
+      const previewPart = w.previewUrl ? ` · ${palette.cyan(w.previewUrl)}` : ''
+      return `[${idx + 1}] ${badge}  ${palette.bold(w.title)} · ${branchPart} · ${diffPart}${previewPart}`
+    })
+    if (isTty) {
+      const cols = (stdout as NodeJS.WriteStream).columns || 96
+      stdout.write(`\n${renderFramedCard({ title: 'Parallel Worktree Fleet', badge: `${workers.length}`, lines, cols, maxWidth: 100, palette })}\n\n`)
+    } else {
+      stdout.write(`${lines.join('\n')}\n`)
+    }
+    return 0
+  }
+
+  if (sub === 'launch') {
+    if (!workspace) {
+      stderr.write('Select a Git workspace folder before launching worktrees.\n')
+      return 1
+    }
+    const noWait = tokens.includes('--no-wait')
+    const rawTasks = tokens.slice(1).filter((t) => t !== '--wait' && t !== '--no-wait')
+    const joined = rawTasks.join(' ').trim()
+    const prompts =
+      rawTasks.length > 1
+        ? rawTasks.map((s) => s.trim()).filter(Boolean)
+        : joined
+            .split(';;')
+            .map((s) => s.trim())
+            .filter(Boolean)
+
+    if (prompts.length === 0) {
+      stderr.write('Usage: fleet launch "<task1>" "<task2>" (or `/fleet launch task1 ;; task2` in REPL)\n')
+      return 2
+    }
+
+    const res = await runtime.fleet.launch({
+      baseWorkspace: workspace,
+      tasks: prompts.map((prompt) => ({ prompt })),
+    })
+
+    if (!opts.interactive && !noWait && res.launched.length > 0) {
+      const ids = res.launched.map((l) => l.conversationId)
+      while (ids.some((id) => runtime.agent.busy(id))) {
+        await new Promise((r) => setTimeout(r, 80))
+      }
+    }
+
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(res, null, 2)}\n`)
+      return res.errors.length > 0 && res.launched.length === 0 ? 1 : 0
+    }
+    for (const item of res.launched) {
+      stdout.write(`  ${palette.green('✓')} ${item.title} [${item.branch}] (${item.conversationId})\n`)
+    }
+    for (const err of res.errors) {
+      stderr.write(`  ${palette.red('✗')} Task #${err.index + 1}: ${err.error}\n`)
+    }
+    return res.errors.length > 0 && res.launched.length === 0 ? 1 : 0
+  }
+
+  const workers = await runtime.fleet.list(workspace)
+
+  if (sub === 'stop') {
+    const rawTarget = tokens[1]
+    if (!rawTarget || rawTarget.toLowerCase() === 'all') {
+      const count = runtime.fleet.stopAll(workspace)
+      if (opts.json) stdout.write(`${JSON.stringify({ stopped: count })}\n`)
+      else stdout.write(`Stopped ${count} active worktree worker(s).\n`)
+      return 0
+    }
+    const target = resolveFleetTarget(workers, rawTarget)
+    if (!target) {
+      stderr.write(`Worktree worker "${rawTarget}" not found. Run "fleet list" first.\n`)
+      return 1
+    }
+    runtime.agent.stop(target.conversationId)
+    if (opts.json) stdout.write(`${JSON.stringify({ stopped: 1, conversationId: target.conversationId })}\n`)
+    else stdout.write(`Stopped worktree "${target.branch}".\n`)
+    return 0
+  }
+
+  const target = resolveFleetTarget(workers, tokens[1])
+  if (!target) {
+    stderr.write(`Worktree worker "${tokens[1] ?? ''}" not found. Run "fleet list" first.\n`)
+    return 1
+  }
+
+  if (sub === 'diff') {
+    const res = await runtime.fleet.inspectDiff(target.conversationId)
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(res, null, 2)}\n`)
+      return 0
+    }
+    if (res.files.length === 0) {
+      stdout.write(`No changes yet in "${res.worker.branch}".\n`)
+      return 0
+    }
+    const termCols = Math.max(48, (stdout as NodeJS.WriteStream).columns || 90)
+    const diffW = Math.min(82, Math.max(40, termCols - 10))
+    for (const file of res.files) {
+      stdout.write(`\n${palette.bold(file.path)} [${file.status}] ${palette.green(`+${file.additions}`)}/${palette.red(`-${file.deletions}`)}\n`)
+      if (file.diff.trim()) {
+        stdout.write(`${formatColoredDiff(file.diff, palette, 24, diffW)}\n`)
+      }
+    }
+    return 0
+  }
+
+  if (sub === 'open') {
+    if (!opts.interactive || !opts.onSwitchChat) {
+      stderr.write(`Run "atrium -r ${target.conversationId}" to resume this worktree session directly.\n`)
+      return 1
+    }
+    const loaded = await runtime.chats.get(target.conversationId)
+    if (!loaded) {
+      stderr.write(`Could not load conversation "${target.conversationId}".\n`)
+      return 1
+    }
+    await opts.onSwitchChat(loaded)
+    stdout.write(`Switched to worktree "${target.branch}" (${loaded.workspace}).\n`)
+    return 0
+  }
+
+  if (sub === 'merge') {
+    const keep = tokens.includes('--keep')
+    const merged = await runtime.fleet.merge(target.conversationId, { cleanupWorktree: !keep })
+    if (currentConversation?.id === target.conversationId && opts.onSwitchChat) {
+      const updated = await runtime.chats.get(target.conversationId)
+      if (updated) await opts.onSwitchChat(updated)
+    }
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(merged, null, 2)}\n`)
+      return 0
+    }
+    stdout.write(
+      `Merged "${merged.branch}" -> ${merged.baseBranch || 'HEAD'}${merged.mergedCommit ? ` (${merged.mergedCommit})` : ''}${merged.cleanedUp ? ' and cleaned up worktree' : ''}.\n`,
+    )
+    return 0
+  }
+
+  if (sub === 'discard' || sub === 'rm' || sub === 'delete') {
+    await runtime.fleet.discard(target.conversationId)
+    if (currentConversation?.id === target.conversationId && opts.onSwitchChat) {
+      const next = await runtime.openOrCreateChat()
+      await opts.onSwitchChat(next)
+    }
+    if (opts.json) {
+      stdout.write(`${JSON.stringify({ discarded: target.conversationId, branch: target.branch })}\n`)
+      return 0
+    }
+    stdout.write(`Discarded worktree "${target.branch}" (${target.conversationId}).\n`)
+    return 0
+  }
+
+  stderr.write(`Unknown fleet subcommand "${sub}". Run "fleet help" for usage.\n`)
+  return 2
+}
+
+export async function handleFleetCommand(
+  runtime: CliRuntime,
+  conversation: Conversation,
+  arg: string,
+  io: CommandIo,
+  onSwitchChat?: (conv: Conversation) => Promise<void> | void,
+): Promise<void> {
+  const ws = resolvePolicyWorkspace(runtime, conversation)
+  const tokens = splitCliTokens(arg)
+  await executeFleetAction(runtime, ws, conversation, tokens, {
+    json: false,
+    interactive: true,
+    io,
+    onSwitchChat,
+  })
+}
+
+export async function runFleetSubcommand(
+  runtime: CliRuntime,
+  subArgs: readonly string[],
+  json: boolean,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  const io = makeDefaultIo(stdout, stderr)
+  return executeFleetAction(runtime, resolvePolicyWorkspace(runtime), undefined, subArgs, {
+    json,
+    interactive: false,
+    io,
+  })
+}
+
+export async function handlePreviewCommand(
+  runtime: CliRuntime,
+  conversation: Conversation,
+  arg: string,
+  io: CommandIo,
+): Promise<void> {
+  const { stdout, stderr, palette } = io
+  const tokens = splitCliTokens(arg)
+  const sub = tokens[0]?.toLowerCase() || 'list'
+
+  if (sub === 'help' || sub === '--help' || sub === '-h') {
+    stdout.write(`Usage:
+  /preview list               Show managed dev servers in this workspace/session
+  /preview start <command>    Start a dev server, wait for localhost URL, and show logs
+  /preview logs [serverId]    Show recent stdout/stderr from a managed preview server
+  /preview stop [serverId]    Stop a running preview server (defaults to all in this chat)
+`)
+    return
+  }
+
+  if (sub === 'list' || sub === 'ls') {
+    const servers = runtime.previews.list(conversation.id)
+    if (servers.length === 0) {
+      stdout.write('No managed preview servers in this conversation.\n')
+      return
+    }
+    for (const srv of servers) {
+      const state = srv.status === 'running' ? palette.green(srv.status) : srv.status === 'error' ? palette.red(srv.status) : palette.muted(srv.status)
+      stdout.write(`- ${srv.id} [${state}] ${srv.url ?? '(no URL)'} · ${srv.command}\n`)
+    }
+    return
+  }
+
+  if (sub === 'start') {
+    const ws = conversation.workspace ?? runtime.workspace
+    if (!ws) {
+      stderr.write('No workspace folder is set.\n')
+      return
+    }
+    const cmd = arg.trim().slice('start'.length).trim()
+    if (!cmd) {
+      stderr.write('Usage: /preview start <command>\n')
+      return
+    }
+    const decision = await evaluateCommandPolicy(ws, cmd)
+    if (!decision.allowed) {
+      stderr.write(`${decision.reason ?? 'Blocked by project command security policy.'}\n`)
+      return
+    }
+    const res = await runtime.previews.start({
+      workspace: ws,
+      command: cmd,
+      conversationId: conversation.id,
+    })
+    stdout.write(`Preview ${res.server.id} [${res.server.status}] · URL: ${res.server.url ?? '(pending)'} · ready: ${res.ready ? 'yes' : 'no'}\n`)
+    if (res.logTail.trim()) {
+      stdout.write(`${palette.muted(res.logTail.trim())}\n`)
+    }
+    return
+  }
+
+  if (sub === 'logs') {
+    const record = runtime.previews.logs({
+      serverId: tokens[1],
+      conversationId: conversation.id,
+    })
+    if (!record) {
+      stdout.write('No managed preview server found for this conversation.\n')
+      return
+    }
+    stdout.write(`Preview ${record.server.id} [${record.server.status}] ${record.server.url ?? ''}\n`)
+    stdout.write(`${record.logs.trim() || '(no output yet)'}\n`)
+    return
+  }
+
+  if (sub === 'stop') {
+    const targetId = tokens[1]
+    if (targetId && targetId.toLowerCase() !== 'all') {
+      const ok = await runtime.previews.stop(targetId)
+      stdout.write(ok ? `Stopped preview server ${targetId}.\n` : `Preview server "${targetId}" not found.\n`)
+      return
+    }
+    const count = await runtime.previews.stopForConversation(conversation.id)
+    stdout.write(count > 0 ? `Stopped ${count} preview server(s).\n` : 'No running preview server in this conversation.\n')
+    return
+  }
+
+  stderr.write(`Unknown preview subcommand "${sub}". Type "/preview help" for usage.\n`)
+}

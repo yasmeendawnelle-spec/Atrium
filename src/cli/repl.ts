@@ -33,11 +33,14 @@ import {
   handleConfigCommand,
   handleEffortCommand,
   handleUltracodeCommand,
+  handleFleetCommand,
   handleGitCommand,
   handleMcpCommand,
   handleMemoryCommand,
   handlePermissionsCommand,
   handlePluginCommand,
+  handlePolicyCommand,
+  handlePreviewCommand,
   handleProviderCommand,
   handleSkillsCommand,
   handleUsageCommand,
@@ -124,6 +127,9 @@ const SLASH_COMMANDS: readonly ComposerCommandItem[] = [
   { cmd: '/export', hint: 'Export conversation transcript to Markdown' },
   { cmd: '/cwd', hint: 'Change active workspace directory' },
   { cmd: '/permissions', hint: 'Inspect or clear workspace allow rules' },
+  { cmd: '/policy', hint: 'Inspect, test, or update .atrium/policy.json security guardrails' },
+  { cmd: '/fleet', hint: 'Launch, inspect, merge, or discard parallel Git worktree workers' },
+  { cmd: '/preview', hint: 'Start, inspect logs, or stop a local dev preview server' },
   { cmd: '/thinking', hint: 'Toggle streaming reasoning display (or Ctrl+O)' },
   { cmd: '/clear', hint: 'Clear terminal and redraw welcome dashboard (or Ctrl+L)' },
   { cmd: '/exit', hint: 'Exit Atrium CLI' },
@@ -1193,6 +1199,23 @@ export async function runInteractiveRepl(
 
       case '/permissions':
         await handlePermissionsCommand(runtime, conversation, arg, commandIo)
+        return 'continue'
+
+      case '/policy':
+        await handlePolicyCommand(runtime, conversation, arg, commandIo)
+        return 'continue'
+
+      case '/fleet':
+        await handleFleetCommand(runtime, conversation, arg, commandIo, async (nextConv) => {
+          conversation = nextConv
+          await refreshWorkspaceMeta()
+          updateWindowTitle(false)
+        })
+        await refreshWorkspaceMeta()
+        return 'continue'
+
+      case '/preview':
+        await handlePreviewCommand(runtime, conversation, arg, commandIo)
         return 'continue'
 
       case '/diff': {

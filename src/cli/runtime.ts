@@ -3,11 +3,13 @@ import { join, resolve } from 'node:path'
 import { RelayPulseAccountManager } from '../core/account.ts'
 import { AgentLoop } from '../core/agent.ts'
 import { ChatStore } from '../core/chats.ts'
+import { WorktreeFleetManager } from '../core/fleet.ts'
 import { KnowledgeBaseManager } from '../core/knowledge.ts'
 import { McpManager } from '../core/mcp/manager.ts'
 import { MemoryStore } from '../core/memory.ts'
 import { configureNetwork } from '../core/net.ts'
 import { PluginManager } from '../core/plugins.ts'
+import { PreviewServerManager } from '../core/preview.ts'
 import { systemPrompt, ultracodeDirective } from '../core/prompt.ts'
 import { bindSecrets } from '../core/secrets.ts'
 import { SettingsStore } from '../core/settings.ts'
@@ -81,7 +83,9 @@ export class CliRuntime {
   readonly knowledge: KnowledgeBaseManager
   readonly plugins: PluginManager
   readonly skills: SkillsManager
+  readonly previews: PreviewServerManager
   readonly agent: AgentLoop
+  readonly fleet: WorktreeFleetManager
 
   private requireAccountFlag: boolean
   private autoApproveFlag: boolean
@@ -159,6 +163,8 @@ export class CliRuntime {
       return base
     }
 
+    this.previews = new PreviewServerManager()
+
     this.agent = new AgentLoop({
       settings: this.settings,
       mcp: this.mcp,
@@ -169,6 +175,7 @@ export class CliRuntime {
       terminal: this.terminal,
       memory: this.memory,
       knowledge: this.knowledge,
+      preview: this.previews,
       unattended: Boolean(opts.unattended) && !this.autoApproveFlag,
       ...(opts.maxRounds !== undefined ? { maxRounds: opts.maxRounds } : {}),
       emit: (ev) => this.handleAgentEvent(ev),
@@ -184,6 +191,24 @@ export class CliRuntime {
         }
       },
       systemPrompt: customSystemPrompt,
+    })
+
+    this.fleet = new WorktreeFleetManager({
+      chats: this.chats,
+      agent: this.agent,
+      settings: this.settings,
+      checkpoints: this.checkpoints,
+      previews: this.previews,
+      dataDir: this.dataDir,
+      onChatsChanged: () => undefined,
+      emitAgent: (ev) => this.handleAgentEvent(ev),
+      beforeSend: async () => {
+        this.assertReady()
+        const active = this.settings.activeProvider()
+        if (active?.managedBy === 'relaypulse') {
+          await this.account.ensureKeyGroupForModel(active.model).catch(() => undefined)
+        }
+      },
     })
   }
 
@@ -544,6 +569,8 @@ export class CliRuntime {
     if (this.disposed) return
     this.disposed = true
     this.agent.stopAll()
+    await this.previews.stopAll().catch(() => undefined)
+    this.previews.shutdown()
     this.terminal.shutdown()
     await this.mcp.shutdown().catch(() => undefined)
   }

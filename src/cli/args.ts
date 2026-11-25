@@ -21,6 +21,8 @@ export type CliCommand =
   | 'plugin'
   | 'plugins'
   | 'import'
+  | 'policy'
+  | 'fleet'
 
 export type CliOutputFormat = 'text' | 'json' | 'stream-json'
 
@@ -73,9 +75,11 @@ const KNOWN_COMMANDS = new Set<CliCommand>([
   'plugin',
   'plugins',
   'import',
+  'policy',
+  'fleet',
 ])
 
-const PASSTHROUGH_SUBCOMMANDS = new Set<CliCommand>(['auth', 'mcp', 'plugin', 'plugins', 'import'])
+const PASSTHROUGH_SUBCOMMANDS = new Set<CliCommand>(['auth', 'mcp', 'plugin', 'plugins', 'import', 'policy', 'fleet'])
 
 function takeValue(argv: readonly string[], idx: number, flag: string): string {
   const val = argv[idx + 1]
@@ -372,6 +376,8 @@ Commands:
   mcp <list|add|get|remove|...>   Configure and inspect MCP servers
   plugin <list|discover|import|...> Manage Atrium / Claude-Code-compatible plugins
   import [--all]                  Import plugins & skills discovered from Claude Code / Codex / Workspace
+  policy <status|check|...>       Inspect/test/configure .atrium/policy.json security guardrails
+  fleet <list|launch|diff|...>    Orchestrate parallel Git worktree tasks from the terminal
   doctor                          Check CLI installation, credentials, instructions, plugins, and Git
   usage                           Show token usage summary across chats and providers
   status                          Show active provider/model, workspace, account, and MCP status
@@ -408,8 +414,8 @@ Options:
 Interactive Slash Commands & Composer Shortcuts:
   /help /theme /login /logout /account /status /doctor /model /provider /effort /ultracode /mode
   /scene /context /config /usage /thinking /new /resume /retry /fork /rename /compact
-  /export /cwd /init /mcp /plugin /skills /memory /permissions /diff /undo /rewind /git
-  /commit /clear /exit
+  /export /cwd /init /mcp /plugin /skills /memory /permissions /policy /diff /undo /rewind /git
+  /commit /fleet /preview /clear /exit
   Shift+Tab (cycle mode)  Ctrl+O (thinking)  Ctrl+G (editor)  Ctrl+L (clear)  /  @file  !cmd
 `
 }
