@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FolderOpen, MessageSquare, Minimize2, Moon, Package, Plug, Plus, RefreshCw, RotateCw, Search, Settings, Sparkles, Store, Sun } from 'lucide-react'
+import { ExternalLink, FolderOpen, GitFork, MessageSquare, Minimize2, Moon, Package, Plug, Plus, RefreshCw, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Sun } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { isEmptyChatStub } from '@shared/types.ts'
 import { call, shell } from '../lib/api.ts'
 import { compactChat, newChat, openChat } from '../lib/chats.ts'
-import { checkForUpdates, installAppUpdate, navigate, openSettings, setState, toast, useStore } from '../lib/store.ts'
+import { checkForUpdates, installAppUpdate, navigate, openFleetModal, openPolicyModal, openSettings, setState, toast, useStore } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { folderName, setWorkspace } from './WorkspacePicker.tsx'
 
 interface PaletteItem {
@@ -20,6 +21,7 @@ interface PaletteItem {
 
 export function CommandPalette() {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const open = useStore((s) => s.paletteOpen)
   const chats = useStore((s) => s.chats)
   const live = useStore((s) => s.live)
@@ -125,6 +127,22 @@ export function CommandPalette() {
         sub: 'Ctrl+,',
         icon: Settings,
         run: () => openSettings('general'),
+      },
+      {
+        id: 'act:fleet',
+        group: 'action',
+        label: ft('fleet.navLabel'),
+        sub: 'Worktrees',
+        icon: GitFork,
+        run: () => openFleetModal(),
+      },
+      {
+        id: 'act:policy',
+        group: 'action',
+        label: ft('policy.navLabel'),
+        sub: '.atrium/policy.json',
+        icon: ShieldCheck,
+        run: () => openPolicyModal(),
       },
       {
         id: 'act:check-updates',

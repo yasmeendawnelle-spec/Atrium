@@ -13,6 +13,8 @@ import {
   MousePointer2,
   Plus,
   RotateCw,
+  Server,
+  Square,
   Terminal,
   X,
 } from 'lucide-react'
@@ -22,6 +24,7 @@ import type { BrowserElementRef, BrowserMode, BrowserViewLayout, ImageAttachment
 import { resolveLocale } from '../i18n.ts'
 import { call, errorMessage, shell } from '../lib/api.ts'
 import { browserSnapshotFor, setBrowserSnapshot, setState, toast, useStore } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 
 const OVERLAY_SELECTOR =
   '[role="dialog"], .ctx-menu, .mention-popover, .open > .model-popover, .open > .tools-popover, .open > .workspace-popover, .open > .perm-popover, .open > .context-popover, .open > .plus-popover'
@@ -49,9 +52,20 @@ export function BrowserPreviewPanel({
   onAttachScreenshot?: (image: ImageAttachment) => void
 }) {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const settings = useStore((s) => s.settings)
   const storeActiveChatId = useStore((s) => s.activeChatId)
+  const chats = useStore((s) => s.chats)
+  const previewServers = useStore((s) => s.previewServers)
   const effectiveCid = (conversationId ?? storeActiveChatId) || undefined
+  const activeChatMeta = effectiveCid ? chats.find((c) => c.id === effectiveCid) : undefined
+  const activeWorkspace = activeChatMeta?.workspace ?? settings?.workspace
+  const matchingServer =
+    (effectiveCid
+      ? previewServers.find((srv) => srv.conversationId === effectiveCid && (srv.status === 'running' || srv.status === 'starting')) ??
+        previewServers.find((srv) => srv.conversationId === effectiveCid)
+      : undefined) ??
+    previewServers.find((srv) => srv.status === 'running' || srv.status === 'starting')
   const snapshot = useStore((s) => browserSnapshotFor(s, effectiveCid))
   const settingsOpen = useStore((s) => s.settingsOpen)
   const paletteOpen = useStore((s) => s.paletteOpen)
@@ -65,6 +79,10 @@ export function BrowserPreviewPanel({
   const [domOccluded, setDomOccluded] = useState(isViewportOccluded)
   const [activeInputRef, setActiveInputRef] = useState<BrowserElementRef | null>(null)
   const [typeDraft, setTypeDraft] = useState('')
+  const [launcherOpen, setLauncherOpen] = useState(false)
+  const [serverCmd, setServerCmd] = useState('npm run dev')
+  const [serverLaunching, setServerLaunching] = useState(false)
+  const [serverLogs, setServerLogs] = useState('')
   const stageRef = useRef<HTMLDivElement | null>(null)
   const urlInputRef = useRef<HTMLInputElement | null>(null)
   const latestLayoutRef = useRef<BrowserViewLayout | null>(null)
@@ -233,7 +251,51 @@ export function BrowserPreviewPanel({
         rafSyncRef.current = null
       }
     }
-  }, [pushStageLayout, logsOpen, refsOpen, activeInputRef, snapshot?.tabs?.length, snapshot?.elements.length])
+  }, [pushStageLayout, logsOpen, refsOpen, activeInputRef, launcherOpen, matchingServer?.id, matchingServer?.status, snapshot?.tabs?.length, snapshot?.elements.length])
+
+  useEffect(() => {
+    if (!logsOpen || !matchingServer) return
+    let cancelled = false
+    const pull = () => {
+      void call('preview.logs', matchingServer.id)
+        .then((res) => {
+          if (!cancelled && res) setServerLogs(res.logs)
+        })
+        .catch(() => undefined)
+    }
+    pull()
+    const timer = matchingServer.status === 'running' || matchingServer.status === 'starting' ? window.setInterval(pull, 2000) : null
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearInterval(timer)
+    }
+  }, [logsOpen, matchingServer?.id, matchingServer?.status])
+
+  const startManagedPreview = async () => {
+    if (!activeWorkspace || !serverCmd.trim() || serverLaunching) return
+    setServerLaunching(true)
+    autoLaunchStartedRef.current = true
+    userClosedRef.current = false
+    try {
+      const res = await call('preview.start', {
+        workspace: activeWorkspace,
+        command: serverCmd.trim(),
+        conversationId: effectiveCid,
+      })
+      if (res.server.url) {
+        setUrlInput(res.server.url)
+        if (res.ready) void openUrl(res.server.url)
+      }
+      if (!res.ready && res.server.error) {
+        toast(res.server.error, 'error')
+      }
+      setLauncherOpen(false)
+    } catch (err) {
+      toast(errorMessage(err), 'error')
+    } finally {
+      setServerLaunching(false)
+    }
+  }
 
   useEffect(() => {
     return () => {
@@ -433,6 +495,17 @@ export function BrowserPreviewPanel({
         </div>
 
         <div className="browser-toolbar-acts">
+          {activeWorkspace && (
+            <button
+              type="button"
+              className={`icon-btn${launcherOpen || matchingServer?.status === 'running' ? ' is-active' : ''}`}
+              onClick={() => setLauncherOpen((v) => !v)}
+              title={ft('preview.startServerBtn')}
+              aria-label={ft('preview.startServerBtn')}
+            >
+              <Server size={13} />
+            </button>
+          )}
           {onAttachScreenshot && (
             <button
               type="button"
@@ -473,6 +546,82 @@ export function BrowserPreviewPanel({
           </button>
         </div>
       </form>
+
+      {launcherOpen && activeWorkspace && (
+        <form
+          className="preview-srv-launcher"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void startManagedPreview()
+          }}
+        >
+          <input
+            value={serverCmd}
+            onChange={(e) => setServerCmd(e.target.value)}
+            placeholder={ft('preview.commandPlaceholder')}
+            aria-label={ft('preview.startServerBtn')}
+          />
+          <button type="submit" className="btn btn-small btn-primary" disabled={serverLaunching || !serverCmd.trim()}>
+            {serverLaunching ? ft('preview.starting') : ft('preview.launch')}
+          </button>
+        </form>
+      )}
+
+      {matchingServer && (
+        <div className="preview-srv-bar">
+          <div className="preview-srv-meta">
+            <span className={`preview-srv-status ${matchingServer.status}`}>
+              <span className={`fleet-dot${matchingServer.status === 'running' || matchingServer.status === 'starting' ? ' pulse' : ''}`} />
+              <span>
+                {matchingServer.status === 'running'
+                  ? ft('preview.statusRunning')
+                  : matchingServer.status === 'starting'
+                    ? ft('preview.statusStarting')
+                    : matchingServer.status === 'error'
+                      ? ft('preview.statusError')
+                      : ft('preview.statusStopped')}
+              </span>
+            </span>
+            {matchingServer.url ? (
+              <button
+                type="button"
+                className="preview-srv-url"
+                onClick={() => {
+                  setUrlInput(matchingServer.url!)
+                  void openUrl(matchingServer.url!)
+                }}
+                title={ft('preview.openInPanel', { url: matchingServer.url })}
+              >
+                {matchingServer.url}
+              </button>
+            ) : (
+              <span className="preview-srv-url">{matchingServer.command}</span>
+            )}
+          </div>
+          <div className="preview-srv-acts">
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => setLogsOpen((v) => !v)}
+              title={ft('preview.serverLogsTitle')}
+            >
+              {t('browser.console')}
+            </button>
+            {(matchingServer.status === 'running' || matchingServer.status === 'starting') && (
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={() => void call('preview.stop', matchingServer.id).catch((err) => toast(errorMessage(err), 'error'))}
+                title={ft('preview.stopServer')}
+                aria-label={ft('preview.stopServer')}
+              >
+                <Square size={11} />
+                <span>{ft('preview.stopServer')}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {snapshot?.error && (
         <div className="browser-err">
@@ -612,6 +761,15 @@ export function BrowserPreviewPanel({
               ))
             )}
           </div>
+
+          {matchingServer && (
+            <div className="preview-srv-logbox">
+              <div className="small" style={{ fontWeight: 600 }}>
+                {ft('preview.serverLogsTitle')} ({matchingServer.command})
+              </div>
+              <pre className="preview-srv-logpre">{serverLogs.trim() || ft('preview.noServerLogs')}</pre>
+            </div>
+          )}
         </div>
       )}
 

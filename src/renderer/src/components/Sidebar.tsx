@@ -1,9 +1,10 @@
 import { useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Archive, ArchiveRestore, ArrowDown, ArrowDownAZ, ArrowUp, BrainCircuit, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, Command, Copy, Download, FolderOpen, FolderPlus, GitBranch, MessageSquare, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, RotateCw, Search, Settings, Sparkles, Store, Trash2, UserCircle2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowDownAZ, ArrowUp, BrainCircuit, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, Command, Copy, Download, FolderOpen, FolderPlus, GitBranch, GitFork, MessageSquare, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Trash2, UserCircle2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { isEmptyChatStub, type ConversationMeta } from '@shared/types.ts'
 import { deleteChat, forkChat, newChat, openChat, stopChat } from '../lib/chats.ts'
-import { installAppUpdate, liveFor, navigate, openAccountModal, openSettings, openUpdatePrompt, setState, toast, toggleSidebar, useStore, type View } from '../lib/store.ts'
+import { installAppUpdate, liveFor, navigate, openAccountModal, openFleetModal, openPolicyModal, openSettings, openUpdatePrompt, setState, toast, toggleSidebar, useStore, type View } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { call, errorMessage, shell } from '../lib/api.ts'
 import { AccountAvatar } from './AccountPanel.tsx'
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu.tsx'
@@ -58,6 +59,7 @@ export function Sidebar({
   onResetWidth?: () => void
 }) {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const chats = useStore((s) => s.chats)
   const activeId = useStore((s) => s.activeChatId)
   const view = useStore((s) => s.view)
@@ -74,6 +76,8 @@ export function Sidebar({
   const update = useStore((s) => s.update)
   const activeProviderId = settings?.activeProviderId ?? providers[0]?.id
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? providers[0]
+  const fleetOpen = useStore((s) => s.fleetOpen)
+  const policyOpen = useStore((s) => s.policyOpen)
   const [confirmDeleteChat, setConfirmDeleteChat] = useState<ConversationMeta | null>(null)
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<WorkspaceGroup | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -91,6 +95,8 @@ export function Sidebar({
   } | null>(null)
 
   const realChats = chats.filter((c) => !isEmptyChatStub(c, busy.has(c.id)))
+  const worktreeChats = realChats.filter((c) => Boolean(c.worktreeBaseWorkspace && c.worktreeBranch && !c.archived))
+  const busyWorktrees = worktreeChats.filter((c) => busy.has(c.id)).length
 
   const q = chatQuery.trim().toLowerCase()
   const matchedChats = q
@@ -536,6 +542,27 @@ export function Sidebar({
             {v === 'knowledge' && memoryAndKbCount > 0 && <span className="side-count">{memoryAndKbCount}</span>}
           </button>
         ))}
+        <button
+          type="button"
+          className={`side-item${fleetOpen ? ' active' : ''}`}
+          onClick={openFleetModal}
+        >
+          <GitFork size={17} strokeWidth={1.75} />
+          <span>{ft('fleet.navLabel')}</span>
+          {worktreeChats.length > 0 && (
+            <span className={`side-count side-fleet-badge${busyWorktrees > 0 ? ' is-running' : ''}`}>
+              {worktreeChats.length}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          className={`side-item${policyOpen ? ' active' : ''}`}
+          onClick={openPolicyModal}
+        >
+          <ShieldCheck size={17} strokeWidth={1.75} />
+          <span>{ft('policy.navLabel')}</span>
+        </button>
       </nav>
 
       <div className="side-group-row">

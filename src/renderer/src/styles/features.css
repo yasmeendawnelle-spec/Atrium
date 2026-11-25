@@ -1,0 +1,665 @@
+/* Styles for Worktree Fleet Command Center, Security Policy Editor, and Managed Dev-Server Preview */
+
+.feature-modal {
+  width: min(820px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-float);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+.feature-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.feature-modal-title-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.feature-modal-ico {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-md);
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.feature-modal-title {
+  margin: 0;
+  font-size: var(--t-16);
+  font-weight: 650;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.feature-modal-sub {
+  margin: 3px 0 0;
+  font-size: var(--t-12);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.feature-modal-head-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.feature-modal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.feature-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--subtle);
+  font-size: var(--t-13);
+  color: var(--ink-2);
+}
+
+.feature-banner.warn {
+  background: var(--warn-tint);
+  border-color: rgba(158, 101, 8, 0.25);
+  color: var(--warn);
+}
+
+.feature-banner.ok {
+  background: var(--ok-tint);
+  border-color: rgba(46, 122, 82, 0.25);
+  color: var(--ok);
+}
+
+.feature-banner.err {
+  background: var(--danger-tint);
+  border-color: rgba(186, 62, 53, 0.25);
+  color: var(--danger);
+}
+
+/* ---- Fleet Command Center ---- */
+
+.fleet-stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-chip);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: var(--t-12);
+  color: var(--ink-2);
+}
+
+.fleet-stat-chip.running {
+  background: var(--accent-tint);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+.fleet-stat-chip.approval {
+  background: var(--warn-tint);
+  border-color: rgba(158, 101, 8, 0.25);
+  color: var(--warn);
+}
+
+.fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.fleet-dot.pulse {
+  animation: fleetPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes fleetPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+
+.fleet-launcher {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fleet-launcher-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--t-13);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.fleet-task-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-task-row {
+  display: grid;
+  grid-template-columns: 1fr 168px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 680px) {
+  .fleet-task-row {
+    grid-template-columns: 1fr auto;
+  }
+  .fleet-task-branch {
+    grid-column: 1 / -1;
+  }
+}
+
+.fleet-input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--t-13);
+  font-family: var(--font-ui);
+}
+
+.fleet-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.fleet-launcher-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fleet-workers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fleet-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fleet-card-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fleet-card-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fleet-card-title {
+  font-size: var(--t-14);
+  font-weight: 600;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.fleet-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-chip);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fleet-status-pill.running {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.fleet-status-pill.waiting_approval {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+
+.fleet-status-pill.error {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+.fleet-status-pill.idle {
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.fleet-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--t-12);
+  color: var(--muted);
+}
+
+.fleet-branch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  background: var(--subtle);
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.fleet-card-snippet {
+  font-size: var(--t-12);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fleet-card-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fleet-diff-panel {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-diff-file {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.fleet-diff-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.fleet-diff-code {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.45;
+  background: var(--code-bg);
+}
+
+.fleet-diff-line.add {
+  background: var(--tok-add-bg);
+  color: var(--tok-add);
+}
+
+.fleet-diff-line.del {
+  background: var(--tok-del-bg);
+  color: var(--tok-del);
+}
+
+.fleet-diff-line.hunk {
+  color: var(--tok-hunk);
+}
+
+/* ---- Security Policy Modal ---- */
+
+.policy-tabs {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--subtle);
+  border: 1px solid var(--line);
+  gap: 4px;
+  align-self: flex-start;
+}
+
+.policy-tab {
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: var(--t-12);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.policy-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+
+.policy-defaults-box {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-glob-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.policy-glob-chip {
+  font-family: var(--font-code);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+.policy-glob-chip.safe {
+  background: var(--ok-tint);
+  border-color: rgba(46, 122, 82, 0.25);
+  color: var(--ok);
+}
+
+.policy-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 680px) {
+  .policy-fields-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.policy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.policy-field label {
+  font-size: var(--t-12);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.policy-textarea,
+.policy-select {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink);
+  padding: 7px 9px;
+  font-size: var(--t-12);
+}
+
+.policy-textarea {
+  font-family: var(--font-code);
+  min-height: 76px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.policy-textarea:focus,
+.policy-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.policy-tester {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-tester-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.policy-tester-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--t-12);
+  color: var(--ink-2);
+}
+
+.policy-verdict {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--r-chip);
+}
+
+.policy-verdict.allow {
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.policy-verdict.deny {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+/* ---- Managed Dev-Server Preview Bar ---- */
+
+.preview-srv-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-12);
+}
+
+.preview-srv-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.preview-srv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--r-chip);
+  flex-shrink: 0;
+}
+
+.preview-srv-status.running {
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.preview-srv-status.starting {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.preview-srv-status.error {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+.preview-srv-status.stopped {
+  background: var(--subtle);
+  color: var(--muted);
+}
+
+.preview-srv-url {
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-srv-url:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.preview-srv-acts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.preview-srv-launcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-srv-launcher input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+
+.preview-srv-logbox {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preview-srv-logpre {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  font-family: var(--font-code);
+  font-size: 11px;
+  max-height: 110px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-2);
+}
+
+.side-fleet-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.side-fleet-badge.is-running {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}

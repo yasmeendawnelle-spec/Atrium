@@ -29,6 +29,7 @@ import type {
   ToolRunStatus,
   UpdateState,
 } from '@shared/types.ts'
+import type { PreviewServerInfo } from '@shared/studio_features.ts'
 import { call, shell } from './api.ts'
 import { RELAYPULSE_DEFAULT_ORIGIN } from '@shared/relaypulse.ts'
 
@@ -95,6 +96,8 @@ export interface State {
   navIndex: number
   sidebarOpen: boolean
   paletteOpen: boolean
+  fleetOpen: boolean
+  policyOpen: boolean
   settingsOpen: boolean
   settingsSection: SettingsSection
   settings: AppSettings | null
@@ -118,6 +121,7 @@ export interface State {
   browserSnapshot: BrowserSnapshot | null
   browserSnapshotsByChat: Record<string, BrowserSnapshot>
   browserRequestedOpen: number
+  previewServers: PreviewServerInfo[]
   chats: ConversationMeta[]
   activeChatId: string | null
   newChatUseWorktree: boolean
@@ -144,6 +148,8 @@ let state: State = {
   navIndex: 0,
   sidebarOpen: localStorage.getItem('atrium.sidebar') !== 'closed',
   paletteOpen: false,
+  fleetOpen: false,
+  policyOpen: false,
   settingsOpen: false,
   settingsSection: 'general',
   settings: null,
@@ -167,6 +173,7 @@ let state: State = {
   browserSnapshot: null,
   browserSnapshotsByChat: {},
   browserRequestedOpen: 0,
+  previewServers: [],
   chats: [],
   activeChatId: null,
   newChatUseWorktree: false,
@@ -438,7 +445,7 @@ function onAgent(e: AgentEvent): void {
       queueStreamDelta(id, 'reasoning', e.text)
       return
     case 'tool_call':
-      if (e.call.name.startsWith('browser_') && !autoOpenedBrowserChats.has(id) && getState().activeChatId === id) {
+      if ((e.call.name.startsWith('browser_') || e.call.name === 'preview_start') && !autoOpenedBrowserChats.has(id) && getState().activeChatId === id) {
         autoOpenedBrowserChats.add(id)
         requestOpenBrowserDrawer()
       }
@@ -605,6 +612,8 @@ export function handleCoreEvent(event: CoreEvent): void {
     setState({ knowledge: event.payload })
   } else if (event.channel === 'browser') {
     setBrowserSnapshot(event.payload)
+  } else if (event.channel === 'preview') {
+    setState({ previewServers: event.payload.servers })
   } else if (event.channel === 'account') {
     setState({ account: event.payload })
     void Promise.all([call('providers.list'), call('settings.get')])
@@ -645,6 +654,7 @@ export async function loadAll(): Promise<void> {
     call('automations.list').catch(() => [] as AutomationRule[]),
     call('sandbox.info').catch(() => null),
     call('browser.state').catch(() => null),
+    call('preview.list').catch(() => [] as PreviewServerInfo[]),
   ])
 
   const [settings, providers, servers, statuses, chats, sessionAllows, account, update] = await Promise.all([
@@ -669,7 +679,7 @@ export async function loadAll(): Promise<void> {
     statuses: Object.fromEntries(statuses.map((st) => [st.id, st])),
   })
 
-  void secondaryPromise.then(([skills, plugins, terminalSessions, automations, sandboxInfo, browserSnapshot]) => {
+  void secondaryPromise.then(([skills, plugins, terminalSessions, automations, sandboxInfo, browserSnapshot, previewServers]) => {
     setState((s) => {
       const bKey = browserSnapshot?.conversationId || '__default__'
       return {
@@ -683,6 +693,7 @@ export async function loadAll(): Promise<void> {
         automations,
         sandboxInfo,
         browserSnapshot,
+        previewServers,
         ...(browserSnapshot ? { browserSnapshotsByChat: { ...s.browserSnapshotsByChat, [bKey]: browserSnapshot } } : {}),
       }
     })
@@ -765,11 +776,27 @@ export function canGoForward(s: State = state): boolean {
 }
 
 export function openSettings(section: SettingsSection = 'general'): void {
-  setState({ settingsOpen: true, settingsSection: section, paletteOpen: false })
+  setState({ settingsOpen: true, settingsSection: section, paletteOpen: false, fleetOpen: false, policyOpen: false })
 }
 
 export function closeSettings(): void {
   setState({ settingsOpen: false })
+}
+
+export function openFleetModal(): void {
+  setState({ fleetOpen: true, policyOpen: false, paletteOpen: false, settingsOpen: false })
+}
+
+export function closeFleetModal(): void {
+  setState({ fleetOpen: false })
+}
+
+export function openPolicyModal(): void {
+  setState({ policyOpen: true, fleetOpen: false, paletteOpen: false, settingsOpen: false })
+}
+
+export function closePolicyModal(): void {
+  setState({ policyOpen: false })
 }
 
 export function navigate(target: NavEntry, opts?: { replace?: boolean }): void {

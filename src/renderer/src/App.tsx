@@ -13,6 +13,8 @@ import { newChat, stopChat } from './lib/chats.ts'
 import { ChatView } from './views/ChatView.tsx'
 
 const CommandPalette = lazy(() => import('./components/CommandPalette.tsx').then((m) => ({ default: m.CommandPalette })))
+const FleetModal = lazy(() => import('./components/FleetModal.tsx').then((m) => ({ default: m.FleetModal })))
+const PolicyModal = lazy(() => import('./components/PolicyModal.tsx').then((m) => ({ default: m.PolicyModal })))
 const PluginDiscoveryModal = lazy(() => import('./components/PluginDiscoveryModal.tsx').then((m) => ({ default: m.PluginDiscoveryModal })))
 const AutomationsView = lazy(() => import('./views/AutomationsView.tsx').then((m) => ({ default: m.AutomationsView })))
 const ConnectionsView = lazy(() => import('./views/ConnectionsView.tsx').then((m) => ({ default: m.ConnectionsView })))
@@ -70,6 +72,8 @@ export function App() {
   const view = useStore((s) => s.view)
   const settingsOpen = useStore((s) => s.settingsOpen)
   const paletteOpen = useStore((s) => s.paletteOpen)
+  const fleetOpen = useStore((s) => s.fleetOpen)
+  const policyOpen = useStore((s) => s.policyOpen)
   const pluginDiscoveryOpen = useStore((s) => s.pluginDiscoveryOpen)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const toast = useStore((s) => s.toast)
@@ -251,6 +255,16 @@ export function App() {
       {paletteOpen && (
         <Suspense fallback={null}>
           <CommandPalette />
+        </Suspense>
+      )}
+      {fleetOpen && (
+        <Suspense fallback={null}>
+          <FleetModal />
+        </Suspense>
+      )}
+      {policyOpen && (
+        <Suspense fallback={null}>
+          <PolicyModal />
         </Suspense>
       )}
       <UpdatePrompt />
