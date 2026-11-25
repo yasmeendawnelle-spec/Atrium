@@ -16,7 +16,7 @@ import { createCliRuntime } from './runtime.ts'
 import { formatCompactTokens, renderFramedCard } from './ui.ts'
 import { createTerminalViewport } from './viewport.ts'
 
-export const CLI_VERSION = process.env.ATRIUM_CLI_VERSION || '0.3.4'
+export const CLI_VERSION = process.env.ATRIUM_CLI_VERSION || '0.3.5'
 
 export interface CliIo {
   stdin?: NodeJS.ReadableStream
