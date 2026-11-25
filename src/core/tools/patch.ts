@@ -1,8 +1,9 @@
 // Multi-file atomic patch parser and applier.
 // Supports both Codex `*** Begin Patch` format and standard unified diffs.
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, posix } from 'node:path'
+import { dirname, posix, relative } from 'node:path'
 import type { ToolInfo } from '../../shared/types.ts'
+import { evaluateFileReadPolicy, evaluateFileWritePolicy, inspectWorkspacePolicy } from '../policy.ts'
 import { invalidateWorkspaceFilesCache } from './fileCache.ts'
 import { resolveInside, resolveInsideReal, WorkspaceError } from './workspace.ts'
 
@@ -402,23 +403,50 @@ function applyHunksToContent(path: string, currentRaw: string, hunks: PatchHunk[
 export async function preparePatch(workspace: string, input: Record<string, unknown>): Promise<PreparedPatch> {
   const patchText = typeof input.patch === 'string' ? input.patch : ''
   const parsed = parsePatchText(patchText)
+  const policy = await inspectWorkspacePolicy(workspace)
+  const wsReal = await resolveInsideReal(workspace, '.')
   const touched = new Set<string>()
   const files: FilePreImage[] = []
   const ops: PlannedWriteOp[] = []
+
+  const assertWriteAllowed = async (relCandidate: string, absResolved?: string) => {
+    const rel =
+      absResolved && absResolved.startsWith(wsReal)
+        ? relative(wsReal, absResolved).replace(/\\/g, '/') || relCandidate
+        : relCandidate
+    const dec = await evaluateFileWritePolicy(workspace, rel, policy)
+    if (!dec.allowed) {
+      throw new WorkspaceError(dec.reason ?? `Modifying "${rel}" is blocked by project security policy.`)
+    }
+  }
+
+  const assertReadAllowed = async (relCandidate: string, absResolved?: string) => {
+    const rel =
+      absResolved && absResolved.startsWith(wsReal)
+        ? relative(wsReal, absResolved).replace(/\\/g, '/') || relCandidate
+        : relCandidate
+    const dec = await evaluateFileReadPolicy(workspace, rel, policy)
+    if (!dec.allowed) {
+      throw new WorkspaceError(dec.reason ?? `Reading "${rel}" is blocked by project security policy.`)
+    }
+  }
 
   for (const op of parsed) {
     if (op.kind === 'add') {
       if (touched.has(op.path)) throw new Error(`Duplicate patch operation on "${op.path}".`)
       touched.add(op.path)
       const targetAbs = await resolveTargetInside(workspace, op.path)
+      await assertWriteAllowed(op.path, targetAbs)
       let beforeExists = false
       let beforeContent: string | undefined
       try {
         const s = await stat(targetAbs)
         if (s.isDirectory()) throw new Error(`"${op.path}" is a directory.`)
+        await assertReadAllowed(op.path, targetAbs)
         beforeExists = true
         beforeContent = await readFile(targetAbs, 'utf8')
       } catch (err) {
+        if (err instanceof WorkspaceError) throw err
         if (err instanceof Error && err.message.includes('is a directory')) throw err
       }
       files.push({
@@ -438,6 +466,8 @@ export async function preparePatch(workspace: string, input: Record<string, unkn
       if (touched.has(op.path)) throw new Error(`Duplicate patch operation on "${op.path}".`)
       touched.add(op.path)
       const srcAbs = await resolveInsideReal(workspace, op.path)
+      await assertWriteAllowed(op.path, srcAbs)
+      await assertReadAllowed(op.path, srcAbs)
       const s = await stat(srcAbs)
       if (s.isDirectory()) throw new Error(`"${op.path}" is a directory and cannot be deleted as a file.`)
       const beforeContent = await readFile(srcAbs, 'utf8')
@@ -457,6 +487,8 @@ export async function preparePatch(workspace: string, input: Record<string, unkn
     if (touched.has(op.path)) throw new Error(`Duplicate patch operation on "${op.path}".`)
     touched.add(op.path)
     const srcAbs = await resolveInsideReal(workspace, op.path)
+    await assertReadAllowed(op.path, srcAbs)
+    await assertWriteAllowed(op.path, srcAbs)
     const s = await stat(srcAbs)
     if (s.isDirectory()) throw new Error(`"${op.path}" is a directory.`)
     const beforeContent = await readFile(srcAbs, 'utf8')
@@ -464,6 +496,7 @@ export async function preparePatch(workspace: string, input: Record<string, unkn
 
     if (op.moveTo && op.moveTo !== op.path) {
       const destAbs = await resolveTargetInside(workspace, op.moveTo)
+      await assertWriteAllowed(op.moveTo, destAbs)
       touched.add(op.moveTo)
       files.push({
         path: op.moveTo,

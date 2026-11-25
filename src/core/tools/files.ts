@@ -6,6 +6,7 @@ import type { ToolInfo, WorkspaceFilePreview } from '../../shared/types.ts'
 import { classifyDocumentExt, extractDocument, MAX_DOCUMENT_BYTES } from './documents.ts'
 import { getCachedWorkspaceFiles, invalidateWorkspaceFilesCache, setCachedWorkspaceFiles } from './fileCache.ts'
 import { APPLY_PATCH_TOOL } from './patch.ts'
+import { evaluateFileReadPolicy, evaluateFileWritePolicy, inspectWorkspacePolicy } from '../policy.ts'
 import { isDirectory, resolveInsideReal, WorkspaceError } from './workspace.ts'
 
 export { invalidateWorkspaceFilesCache }
@@ -103,12 +104,22 @@ export async function runReadTool(workspace: string, name: string, input: Record
 }
 
 async function listDir(workspace: string, requested: string): Promise<string> {
+  const wsReal = await resolveInsideReal(workspace, '.')
   const dir = await resolveInsideReal(workspace, requested || '.')
   if (!(await isDirectory(dir))) return `"${requested || '.'}" is not a directory.`
+  const dirRel = relative(wsReal, dir).replace(/\\/g, '/')
+  const policy = await inspectWorkspacePolicy(workspace)
   const entries = await readdir(dir, { withFileTypes: true })
-  const lines = entries
-    .slice(0, MAX_RESULTS)
-    .map((e) => `${e.isDirectory() ? 'dir ' : 'file'} ${e.name}`)
+  const lines: string[] = []
+  for (const e of entries.slice(0, MAX_RESULTS)) {
+    if (e.isDirectory()) {
+      lines.push(`dir  ${e.name}`)
+      continue
+    }
+    const entryRel = dirRel && dirRel !== '.' ? `${dirRel}/${e.name}` : e.name
+    const dec = await evaluateFileReadPolicy(workspace, entryRel, policy)
+    lines.push(dec.allowed ? `file ${e.name}` : `file ${e.name} [protected]`)
+  }
   if (entries.length > MAX_RESULTS) lines.push(`… and ${entries.length - MAX_RESULTS} more`)
   return lines.join('\n') || '(empty directory)'
 }
@@ -152,7 +163,13 @@ async function loadReadableContent(
 }
 
 async function readText(workspace: string, input: Record<string, unknown>): Promise<string> {
+  const wsReal = await resolveInsideReal(workspace, '.')
   const file = await resolveInsideReal(workspace, str(input, 'path'))
+  const rel = relative(wsReal, file).replace(/\\/g, '/') || str(input, 'path')
+  const decision = await evaluateFileReadPolicy(workspace, rel)
+  if (!decision.allowed) {
+    throw new WorkspaceError(decision.reason ?? `Access to "${rel}" is blocked by project security policy.`)
+  }
   const info = await stat(file)
   if (info.isDirectory()) return `"${str(input, 'path')}" is a directory. Use list_dir.`
   const loaded = await loadReadableContent(file, info.size, 5_000_000)
@@ -173,11 +190,12 @@ async function search(workspace: string, input: Record<string, unknown>): Promis
   const caseSensitive = input.case_sensitive === true
   const rawCtx = Number(input.context_lines)
   const contextLines = Number.isFinite(rawCtx) ? Math.min(5, Math.max(0, Math.floor(rawCtx))) : 0
+  const policy = await inspectWorkspacePolicy(workspace)
 
-  const rgResult = await searchWithRipgrep(workspace, root, query, glob, caseSensitive, contextLines)
+  const rgResult = await searchWithRipgrep(workspace, root, query, glob, caseSensitive, contextLines, policy)
   if (rgResult !== null) return rgResult
 
-  return searchFallback(workspace, root, query, glob, caseSensitive)
+  return searchFallback(workspace, root, query, glob, caseSensitive, policy)
 }
 
 async function runRg(args: string[], cwd: string, maxChars = 150_000): Promise<{ code: number | null; stdout: string; enoent?: boolean }> {
@@ -207,6 +225,7 @@ async function searchWithRipgrep(
   glob: string,
   caseSensitive: boolean,
   contextLines: number,
+  policy: Awaited<ReturnType<typeof inspectWorkspacePolicy>>,
 ): Promise<string | null> {
   const baseArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-filesize', '2M']
   baseArgs.push(caseSensitive ? '--case-sensitive' : '--ignore-case')
@@ -225,19 +244,40 @@ async function searchWithRipgrep(
   if (res.code === 1 || !res.stdout.trim()) return 'No matches.'
 
   const wsReal = await resolveInsideReal(workspace, '.').catch(() => resolve(workspace))
+  const relAllowedCache = new Map<string, boolean>()
+  const isRelAllowed = async (relPath: string): Promise<boolean> => {
+    const cached = relAllowedCache.get(relPath)
+    if (cached !== undefined) return cached
+    const dec = await evaluateFileReadPolicy(workspace, relPath, policy)
+    relAllowedCache.set(relPath, dec.allowed)
+    return dec.allowed
+  }
+
   const out: string[] = []
+  let pendingSep = false
+  let hasKeptMatch = false
   for (const rawLine of res.stdout.split(/\r?\n/)) {
     if (!rawLine) continue
     if (rawLine === '--') {
-      out.push('--')
+      pendingSep = hasKeptMatch
       continue
     }
     // rg emits `<absPath>:<line>:<text>` or `<absPath>-<line>-<text>` (context).
     const m = /^(.+?)([:-])(\d+)\2(.*)$/.exec(rawLine)
     if (m) {
       const rel = relative(wsReal, m[1]!).replace(/\\/g, '/')
+      if (!(await isRelAllowed(rel))) continue
+      if (pendingSep) {
+        out.push('--')
+        pendingSep = false
+      }
+      hasKeptMatch = true
       out.push(`${rel}${m[2]}${m[3]}${m[2]} ${m[4]!.trim().slice(0, 200)}`)
     } else {
+      if (pendingSep) {
+        out.push('--')
+        pendingSep = false
+      }
       out.push(rawLine.slice(0, 220))
     }
     if (out.length >= MAX_RESULTS) {
@@ -254,6 +294,7 @@ async function searchFallback(
   query: string,
   glob: string,
   caseSensitive: boolean,
+  policy: Awaited<ReturnType<typeof inspectWorkspacePolicy>>,
 ): Promise<string> {
   const flags = caseSensitive ? '' : 'i'
   let pattern: RegExp
@@ -262,10 +303,14 @@ async function searchFallback(
   } catch {
     pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags)
   }
+  const wsReal = await resolveInsideReal(workspace, '.').catch(() => resolve(workspace))
   const hits: string[] = []
   await walk(root, async (file) => {
     if (hits.length >= MAX_RESULTS) return
     if (glob && !matchGlob(file.slice(root.length), glob)) return
+    const rel = relative(wsReal, file).replace(/\\/g, '/')
+    const dec = await evaluateFileReadPolicy(workspace, rel, policy)
+    if (!dec.allowed) return
     let text: string
     try {
       text = await readFile(file, 'utf8')
@@ -275,7 +320,7 @@ async function searchFallback(
     if (text.includes('\u0000')) return
     text.split(/\r?\n/).forEach((line, i) => {
       if (hits.length < MAX_RESULTS && pattern.test(line)) {
-        hits.push(`${relative(resolve(workspace), file).replace(/\\/g, '/')}:${i + 1}: ${line.trim().slice(0, 200)}`)
+        hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`)
       }
     })
   })
@@ -441,7 +486,13 @@ function matchGlob(filePath: string, glob: string): boolean {
 
 /** Writes a file. Caller must already have the user's approval. */
 export async function writeApproved(workspace: string, requested: string, content: string): Promise<void> {
+  const wsReal = await resolveInsideReal(workspace, '.')
   const file = await resolveInsideReal(workspace, requested)
+  const rel = relative(wsReal, file).replace(/\\/g, '/') || requested
+  const decision = await evaluateFileWritePolicy(workspace, rel)
+  if (!decision.allowed) {
+    throw new WorkspaceError(decision.reason ?? `Writing to "${rel}" is blocked by project security policy.`)
+  }
   await mkdir(dirname(file), { recursive: true })
   await writeFile(file, content, 'utf8')
   invalidateWorkspaceFilesCache(workspace)
@@ -505,7 +556,18 @@ export async function prepareEdit(workspace: string, input: Record<string, unkno
   if (!oldString) throw new Error('old_string must be a non-empty string.')
   if (oldString === newString) throw new Error('new_string must differ from old_string.')
 
+  const wsReal = await resolveInsideReal(workspace, '.')
   const file = await resolveInsideReal(workspace, requested)
+  const rel = relative(wsReal, file).replace(/\\/g, '/') || requested
+  const policy = await inspectWorkspacePolicy(workspace)
+  const readDecision = await evaluateFileReadPolicy(workspace, rel, policy)
+  if (!readDecision.allowed) {
+    throw new WorkspaceError(readDecision.reason ?? `Reading "${rel}" is blocked by project security policy.`)
+  }
+  const writeDecision = await evaluateFileWritePolicy(workspace, rel, policy)
+  if (!writeDecision.allowed) {
+    throw new WorkspaceError(writeDecision.reason ?? `Modifying "${rel}" is blocked by project security policy.`)
+  }
   const info = await stat(file)
   if (info.isDirectory()) throw new Error(`"${requested}" is a directory.`)
   const current = await readFile(file, 'utf8')
@@ -537,6 +599,18 @@ export async function prepareEdit(workspace: string, input: Record<string, unkno
 
 /** Returns a unified diff if overwriting an existing file, or raw content for new files. */
 export async function prepareWriteDiff(workspace: string, requested: string, newContent: string): Promise<string> {
+  const wsReal = await resolveInsideReal(workspace, '.').catch(() => resolve(workspace))
+  let relForPolicy = requested
+  try {
+    const resolved = await resolveInsideReal(workspace, requested)
+    relForPolicy = relative(wsReal, resolved).replace(/\\/g, '/') || requested
+  } catch (err) {
+    if (err instanceof WorkspaceError) throw err
+  }
+  const writeDecision = await evaluateFileWritePolicy(workspace, relForPolicy)
+  if (!writeDecision.allowed) {
+    throw new WorkspaceError(writeDecision.reason ?? `Writing to "${relForPolicy}" is blocked by project security policy.`)
+  }
   try {
     const file = await resolveInsideReal(workspace, requested)
     const info = await stat(file)
