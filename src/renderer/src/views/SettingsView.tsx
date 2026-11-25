@@ -35,7 +35,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { defaultBrowserModeForLocale } from '@shared/browserUrl.ts'
 import { groupModelsByVendor } from '@shared/relaypulse.ts'
-import { CONTEXT_WINDOW_PRESETS, normalizeContextWindowTokens } from '@shared/types.ts'
+import { CONTEXT_WINDOW_PRESETS, normalizeContextWindowTokens, REASONING_EFFORT_LEVELS } from '@shared/types.ts'
 import type {
   AppSettings,
   CodeThemeDark,
@@ -69,6 +69,8 @@ import {
   type SettingsSection,
 } from '../lib/store.ts'
 import { Dialog, ConfirmDialog } from '../components/Dialog.tsx'
+import { EffortSlider } from '../components/EffortSlider.tsx'
+import { UltracodeToggle } from '../components/Ultracode.tsx'
 import { AccountStatusCard } from '../components/AccountPanel.tsx'
 import { ModelCatalogDialog } from '../components/ModelCatalogDialog.tsx'
 import { ProviderForm } from '../components/ProviderForm.tsx'
@@ -201,13 +203,13 @@ function extractSafeSettingsPatch(raw: unknown): Partial<AppSettings> | null {
     out.allowBypassPermissions = src.allowBypassPermissions
     count++
   }
-  if (
-    src.reasoningEffort === 'auto' ||
-    src.reasoningEffort === 'low' ||
-    src.reasoningEffort === 'medium' ||
-    src.reasoningEffort === 'high'
-  ) {
-    out.reasoningEffort = src.reasoningEffort
+  const effort = REASONING_EFFORT_LEVELS.find((lvl) => lvl === src.reasoningEffort)
+  if (effort) {
+    out.reasoningEffort = effort
+    count++
+  }
+  if (typeof src.ultracode === 'boolean') {
+    out.ultracode = src.ultracode
     count++
   }
   if (src.workScene === 'code' || src.workScene === 'work') {
@@ -423,7 +425,7 @@ function GeneralSection() {
   const settings = useStore((s) => s.settings)!
   const widthVal: TranscriptWidth = settings.transcriptWidth ?? 'default'
   const viewVal: TranscriptViewMode = settings.defaultTranscriptView ?? 'normal'
-  const effortVal: ReasoningEffort = settings.reasoningEffort ?? 'medium'
+  const effortVal: ReasoningEffort = settings.reasoningEffort ?? 'auto'
 
   return (
     <div className="settings-pane">
@@ -512,22 +514,29 @@ function GeneralSection() {
           <h3>{t('settings.defaults')}</h3>
         </div>
 
-        <div className="setting-row">
+        <div className="setting-row setting-row-stack">
           <div className="setting-row-meta">
             <strong>{t('settings.reasoningEffort')}</strong>
             <span>{t('settings.reasoningEffortHint')}</span>
           </div>
-          <StudioSelect
-            className="settings-select"
-            ariaLabel={t('settings.reasoningEffort')}
-            value={effortVal}
-            options={[
-              { value: 'auto', label: t('settings.reasoningAuto') },
-              { value: 'low', label: t('settings.reasoningLow') },
-              { value: 'medium', label: t('settings.reasoningMedium') },
-              { value: 'high', label: t('settings.reasoningHigh') },
-            ]}
-            onChange={(val) => void updateSetting({ reasoningEffort: val as ReasoningEffort })}
+          <div className="settings-effort-panel">
+            <EffortSlider
+              ariaLabel={t('settings.reasoningEffort')}
+              value={effortVal}
+              onChange={(val) => void updateSetting({ reasoningEffort: val })}
+            />
+          </div>
+        </div>
+
+        <div className="setting-row setting-row-stack">
+          <div className="setting-row-meta">
+            <strong>{t('settings.ultracode')}</strong>
+            <span>{t('settings.ultracodeHint')}</span>
+          </div>
+          <UltracodeToggle
+            variant="card"
+            checked={settings.ultracode === true}
+            onChange={(next) => void updateSetting({ ultracode: next })}
           />
         </div>
 
@@ -1605,7 +1614,8 @@ function ImportExportSection() {
         browserMode: settings.browserMode,
         autoCompact: settings.autoCompact !== false,
         contextWindowTokens: normalizeContextWindowTokens(settings.contextWindowTokens),
-        reasoningEffort: settings.reasoningEffort ?? 'medium',
+        reasoningEffort: settings.reasoningEffort ?? 'auto',
+        ultracode: settings.ultracode === true,
         workScene: settings.workScene ?? 'code',
         maxAgentRounds: settings.maxAgentRounds ?? 40,
         autoExtractMemory: settings.autoExtractMemory !== false,

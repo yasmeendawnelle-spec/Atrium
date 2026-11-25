@@ -3087,3 +3087,356 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 }
 .diff-split-cell:last-child { border-right: 0; }
 .diff-split-cell.empty { background: color-mix(in srgb, var(--subtle) 45%, transparent); min-height: 20px; }
+
+/* ── Reasoning effort slider (auto → max) ─────────────────────────────────────────
+   Shared by the model popover and Settings. JS sets --effort-pct (knob/fill position),
+   --effort-heat (0..1 by level) and --effort-glow (fill glow strength). */
+.effort {
+  --effort-knob: 18px;
+  --effort-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  display: flex; flex-direction: column; gap: 9px; width: 100%; user-select: none;
+}
+.effort-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }
+.effort-title { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
+.effort-readout {
+  display: inline-flex; align-items: center; gap: 7px; height: 22px; margin-left: auto; padding: 0 10px 0 8px;
+  border-radius: var(--r-chip); background: var(--accent-tint); color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) calc(var(--effort-heat) * 30%), transparent);
+  transition: background 0.2s var(--ease), color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.effort[data-level='auto'] .effort-readout { background: var(--subtle); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.effort-readout-label { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; animation: effortTextIn 0.22s var(--ease) both; }
+
+/* Five ascending bars: the "how hard does it think" glyph. */
+.effort-meter { display: inline-flex; align-items: center; flex: none; line-height: 0; }
+.effort-meter svg { display: block; overflow: visible; }
+.effort-meter rect { fill: var(--line-strong); transition: fill 0.2s var(--ease); }
+.effort-meter rect.on { fill: currentColor; }
+
+.effort-rail {
+  position: relative; height: 24px; margin: 0 calc(var(--effort-knob) / 2); cursor: pointer;
+  touch-action: none; outline: none;
+}
+.effort-track {
+  position: absolute; left: 0; right: 0; top: 50%; height: 6px; transform: translateY(-50%); border-radius: 999px;
+  background: var(--subtle); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07), inset 0 0 0 1px var(--line);
+}
+.effort-fill {
+  position: absolute; inset: 0 auto 0 0; width: var(--effort-pct); border-radius: inherit; overflow: hidden;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, var(--surface)) 0%, var(--accent-soft) 62%, var(--accent) 100%);
+  box-shadow: 0 0 12px 0 color-mix(in srgb, var(--accent) var(--effort-glow), transparent);
+  transition: width 0.42s var(--effort-spring), box-shadow 0.3s var(--ease);
+}
+/* One sheen across the fill when the slider reaches max. */
+.effort[data-level='max'] .effort-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 25%, rgba(255, 255, 255, 0.6) 50%, transparent 75%);
+  background-size: 220% 100%; animation: effortSheen 1.1s 0.12s var(--ease) 1 both;
+}
+.effort-stop {
+  position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: var(--faint); opacity: 0.6; pointer-events: none; transition: background 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+.effort-stop.passed { background: rgba(255, 255, 255, 0.92); opacity: 0.9; }
+.effort-stop.is-auto { opacity: 0; }
+.effort-knob {
+  position: absolute; top: 50%; left: var(--effort-pct); width: var(--effort-knob); height: var(--effort-knob);
+  display: grid; place-items: center; border-radius: 50%; transform: translate(-50%, -50%);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line-strong), 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 12px -3px rgba(0, 0, 0, 0.22);
+  transition: left 0.42s var(--effort-spring), transform 0.18s var(--ease), box-shadow 0.2s var(--ease);
+}
+.effort-knob-core {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--accent-soft), var(--accent));
+  box-shadow: 0 0 0 calc(var(--effort-heat) * 3px) color-mix(in srgb, var(--accent) 18%, transparent);
+  transition: box-shadow 0.25s var(--ease), background 0.2s var(--ease);
+}
+.effort[data-level='auto'] .effort-knob-core { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.effort-rail:hover .effort-knob {
+  transform: translate(-50%, -50%) scale(1.06);
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 0 5px var(--accent-tint), 0 4px 12px -3px rgba(0, 0, 0, 0.22);
+}
+.effort-rail:focus-visible .effort-knob {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-border), 0 4px 12px -3px rgba(0, 0, 0, 0.22);
+}
+.effort.is-dragging .effort-rail { cursor: grabbing; }
+.effort.is-dragging .effort-knob {
+  transition: transform 0.18s var(--ease), box-shadow 0.2s var(--ease);
+  transform: translate(-50%, -50%) scale(1.14);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 7px var(--accent-tint), 0 6px 16px -4px rgba(0, 0, 0, 0.26);
+}
+.effort.is-dragging .effort-fill { transition: box-shadow 0.3s var(--ease); }
+/* A single ring pulse when max is reached. */
+.effort[data-level='max'] .effort-knob::after {
+  content: ''; position: absolute; inset: -2px; border-radius: 50%; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--accent); animation: effortPulse 0.7s var(--ease) 1 both;
+}
+
+.effort-labels { position: relative; height: 18px; margin: -3px calc(var(--effort-knob) / 2) 0; }
+.effort-label {
+  position: absolute; top: 0; transform: translateX(-50%); padding: 1px 4px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--faint); font-size: 11px; line-height: 16px; white-space: nowrap; cursor: pointer;
+  transition: color 0.18s var(--ease), background 0.18s var(--ease);
+}
+.effort-label:first-child { transform: translateX(-30%); }
+.effort-label:last-child { transform: translateX(-70%); }
+.effort-label.passed { color: var(--muted); }
+.effort-label.active { color: var(--accent-text); font-weight: 600; }
+.effort[data-level='auto'] .effort-label.active { color: var(--ink-2); }
+.effort-label:hover { color: var(--ink); background: var(--hover); }
+.effort-hint { margin: 0; min-height: 17px; font-size: 11.5px; line-height: 1.45; color: var(--muted); animation: effortTextIn 0.24s var(--ease) both; }
+.effort-hint-inline { flex: 1; min-width: 0; min-height: 0; font-size: 12px; color: var(--ink-2); }
+.effort:not(.effort-compact) .effort-head { margin-bottom: 4px; }
+.effort-compact { gap: 7px; }
+.effort-compact .effort-label { font-size: 10.5px; }
+.effort-compact .effort-hint { font-size: 11px; min-height: 16px; }
+
+@keyframes effortTextIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes effortSheen { from { background-position: 160% 0; } to { background-position: -60% 0; } }
+@keyframes effortPulse { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+
+/* Model popover: effort + Ultracode section. */
+.model-effort-section { display: flex; flex-direction: column; gap: 10px; padding: 10px 8px 6px; }
+.model-pick-effort { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; color: var(--accent-text); }
+
+/* Settings: stacked rows give the slider and the Ultracode card the full width. */
+.setting-row.setting-row-stack { flex-direction: column; align-items: stretch; gap: 12px; }
+.settings-effort-panel {
+  padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--surface), var(--bg)); box-shadow: var(--shadow-card);
+}
+
+/* ── Ultracode ───────────────────────────────────────────────────────────────────── */
+.ultra {
+  --ultra-ring: linear-gradient(135deg, var(--accent) 0%, var(--accent-soft) 48%, color-mix(in srgb, var(--accent) 50%, var(--warn)) 100%);
+  position: relative; display: flex; flex-direction: column; gap: 10px; width: 100%; padding: 10px;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--subtle);
+  color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), box-shadow 0.25s var(--ease);
+}
+.ultra:hover { background: var(--surface); border-color: var(--line-strong); }
+.ultra:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+.ultra.on {
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--accent) 4%, var(--surface))) padding-box, var(--ultra-ring) border-box;
+  box-shadow: 0 10px 26px -14px color-mix(in srgb, var(--accent) 70%, transparent), 0 0 0 3px var(--accent-tint);
+}
+.ultra-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ultra-glyph {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 9px;
+  background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition: background 0.25s var(--ease), color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+.ultra.on .ultra-glyph {
+  background: var(--ultra-ring); color: var(--accent-ink);
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--accent) 70%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.ultra.on .ultra-glyph svg { animation: ultraSpark 0.6s var(--ease) 1 both; }
+.ultra-body { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.ultra-title-row { display: flex; align-items: center; gap: 7px; }
+.ultra-title { font-size: 12.5px; font-weight: 650; letter-spacing: 0.01em; }
+.ultra.on .ultra-title { background: var(--ultra-ring); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ultra-state {
+  height: 16px; padding: 0 6px; border-radius: var(--r-chip); background: var(--line); color: var(--muted);
+  font-size: 10.5px; font-weight: 600; line-height: 16px;
+}
+.ultra.on .ultra-state { background: var(--accent-tint); color: var(--accent-text); }
+.ultra-sub { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.ultra-switch {
+  position: relative; width: 30px; height: 18px; flex: none; border-radius: 18px; background: var(--line-strong);
+  transition: background 0.2s var(--ease);
+}
+.ultra-switch span {
+  position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22); transition: transform 0.22s var(--effort-spring, var(--ease));
+}
+.ultra.on .ultra-switch { background: var(--accent); }
+.ultra.on .ultra-switch span { transform: translateX(12px); }
+
+/* Workflow stages. Compact: one row of icon + word. Detailed (Settings): four tiles. */
+/* Compact: a pill bar of icon + word, chevrons between, spread evenly. */
+.ultra-flow {
+  position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  margin: 0; padding: 7px 10px; list-style: none; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--line);
+}
+.ultra-step { display: flex; flex: none; align-items: center; gap: 4px; min-width: 0; color: var(--muted); }
+.ultra-sep {
+  flex: none; width: 5px; height: 5px; margin: 0 1px;
+  border-top: 1.5px solid var(--faint); border-right: 1.5px solid var(--faint); transform: rotate(45deg);
+}
+.ultra-step-icon { display: grid; place-items: center; flex: none; color: var(--muted); }
+.ultra-step-text { display: flex; flex-direction: column; min-width: 0; }
+.ultra-step-label { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ultra-step-hint { font-size: 11px; line-height: 1.4; color: var(--muted); }
+.ultra.on .ultra-step { color: var(--ink-2); }
+.ultra.on .ultra-step-icon { color: var(--accent-text); animation: ultraStepIn 0.46s var(--effort-spring, var(--ease)) both; animation-delay: calc(var(--step) * 110ms); }
+.ultra.on .ultra-sep { border-color: var(--accent-soft); }
+
+/* Detailed (Settings): four tiles with a chevron between each. */
+.ultra-flow.detailed {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch; gap: 8px;
+  padding: 0; background: none; box-shadow: none;
+}
+.ultra-flow.detailed .ultra-step {
+  position: relative; flex-direction: column; align-items: flex-start; gap: 7px; padding: 10px;
+  border-radius: 11px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line);
+}
+.ultra-flow.detailed .ultra-step-icon {
+  width: 24px; height: 24px; border-radius: 8px; background: var(--subtle); box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.ultra.on .ultra-flow.detailed .ultra-step-icon { background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.ultra-flow.detailed .ultra-step:not(:last-child)::before {
+  content: ''; position: absolute; top: 50%; right: -7px; width: 6px; height: 6px; z-index: 1;
+  border-top: 1.5px solid var(--faint); border-right: 1.5px solid var(--faint); transform: translateY(-50%) rotate(45deg);
+}
+.ultra-flow.detailed .ultra-step-label { font-size: 12px; color: var(--ink); }
+.ultra.on .ultra-flow.detailed .ultra-step { box-shadow: inset 0 0 0 1px var(--accent-border); }
+.ultra.on .ultra-flow.detailed .ultra-step:not(:last-child)::before { border-color: var(--accent-soft); }
+.ultra-note { font-size: 11px; color: var(--faint); }
+.ultra-card { padding: 14px; gap: 12px; }
+.ultra-card .ultra-glyph { width: 34px; height: 34px; border-radius: 11px; }
+.ultra-card .ultra-title { font-size: 13.5px; }
+.ultra-card .ultra-sub { font-size: 12px; }
+
+/* Composer chip while Ultracode is on. */
+.ultra-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 4px 0 10px; flex: none;
+  border-radius: var(--r-chip); background: var(--accent-tint); color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-border); font-size: var(--t-12); font-weight: 600;
+  animation: ultraChipIn 0.32s var(--ease) both;
+}
+.ultra-chip-label {
+  background: linear-gradient(135deg, var(--accent-text), var(--accent-soft));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.ultra-chip-off {
+  display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--accent-text); opacity: 0.55; cursor: pointer;
+  transition: opacity 0.15s var(--ease), background 0.15s var(--ease);
+}
+.ultra-chip-off:hover { opacity: 1; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* ── Ultracode "on" effects ──────────────────────────────────────────────────────── */
+@property --ultra-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.ultra, .ultra-chip, .composer, .composer-pill {
+  --ultra-c1: var(--accent);
+  --ultra-c2: color-mix(in oklab, var(--accent) 35%, var(--warn));
+  --ultra-c3: color-mix(in oklab, var(--accent) 45%, #a855f7);
+  --ultra-conic: conic-gradient(from var(--ultra-angle), var(--ultra-c1), var(--ultra-c2), var(--ultra-c3), var(--ultra-c1));
+}
+.ultra { isolation: isolate; }
+/* A ring of colour that keeps turning round the card / chip / composer. */
+.ultra-aura, .ultra-chip-aura,
+.composer:not(.compact):has(.ultra-chip)::before,
+.composer.compact:has(.ultra-chip) .composer-pill::before {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: var(--ultra-conic);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: ultraSpin 6s linear infinite, ultraFade 0.45s var(--ease) both;
+}
+.ultra.on { animation: ultraBreathe 3.6s ease-in-out infinite; }
+.ultra.on { background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--accent) 5%, var(--surface))) padding-box; }
+/* One diagonal light sweep across the card as it turns on. */
+.ultra.on::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.32) 50%, transparent 62%) no-repeat;
+  background-size: 260% 100%; animation: ultraSweep 1.1s 0.1s var(--ease) 1 both;
+}
+/* Glyph: a turning halo behind it and a spark burst on switch-on. */
+.ultra-glyph { position: relative; }
+.ultra.on .ultra-glyph::before {
+  content: ''; position: absolute; inset: -5px; z-index: -1; border-radius: 50%;
+  background: var(--ultra-conic); filter: blur(7px); opacity: 0.55;
+  animation: ultraSpin 4s linear infinite, ultraFade 0.5s var(--ease) both;
+}
+.ultra-burst { position: absolute; top: 50%; left: 50%; width: 0; height: 0; pointer-events: none; }
+.ultra-burst i {
+  position: absolute; top: -2px; left: -2px; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--ultra-c2); box-shadow: 0 0 6px 1px var(--ultra-c1);
+  animation: ultraBurst 0.75s cubic-bezier(0.2, 0.7, 0.3, 1) var(--delay) 1 both;
+}
+.ultra-burst i:nth-child(3n) { background: var(--ultra-c3); }
+/* Compact flow: a beam runs left to right and each stage glows as it passes. */
+.ultra-beam { display: none; }
+.ultra.on .ultra-beam {
+  display: block; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ultra-c2) 30%, transparent), transparent) no-repeat;
+  background-size: 34% 100%; animation: ultraBeam 2.8s ease-in-out 0.5s infinite both;
+}
+.ultra-step, .ultra-sep { position: relative; z-index: 1; }
+.ultra.on .ultra-step-icon {
+  animation: ultraStepIn 0.46s var(--effort-spring, var(--ease)) both, ultraStepGlow 2.8s ease-in-out infinite;
+  animation-delay: calc(var(--step) * 110ms), calc(0.5s + var(--step) * 0.62s);
+}
+.ultra.on .ultra-flow.detailed .ultra-step { overflow: hidden; }
+.ultra.on .ultra-flow.detailed .ultra-step::after {
+  content: ''; position: absolute; inset: 0 0 auto; height: 2px; background: var(--ultra-conic);
+  animation: ultraTileLine 2.8s ease-in-out infinite; animation-delay: calc(0.5s + var(--step) * 0.62s);
+}
+
+/* Composer chip: turning ring, shimmering word, twinkling stars, soft breathing glow. */
+.ultra-chip {
+  position: relative; isolation: isolate; box-shadow: none;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  animation: ultraChipIn 0.32s var(--ease) both, ultraBreathe 3.6s ease-in-out 0.4s infinite;
+}
+.ultra-chip-aura { animation-duration: 4s, 0.45s; }
+.ultra-chip-label {
+  background: linear-gradient(90deg, var(--accent-text) 0%, var(--ultra-c3) 25%, var(--ultra-c2) 45%, var(--accent-text) 65%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: ultraShimmer 3.2s linear infinite;
+}
+.ultra-chip-glyph { position: relative; display: grid; place-items: center; }
+.ultra-twinkle {
+  position: absolute; width: 5px; height: 5px; background: var(--ultra-c2);
+  clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+  animation: ultraTwinkle 1.9s ease-in-out infinite;
+}
+.ultra-twinkle.t1 { top: -4px; right: -4px; }
+.ultra-twinkle.t2 { bottom: -3px; left: -4px; width: 4px; height: 4px; background: var(--ultra-c3); animation-delay: 0.95s; }
+/* Composer: the ring plus a slow glow while Ultracode is on. */
+.composer:not(.compact):has(.ultra-chip)::before { animation-duration: 8s, 0.45s; opacity: 0.85; }
+.composer.compact:has(.ultra-chip) .composer-pill::before { animation-duration: 8s, 0.45s; opacity: 0.85; }
+.composer:not(.compact):has(.ultra-chip),
+.composer.compact:has(.ultra-chip) .composer-pill {
+  border-color: transparent;
+  box-shadow: var(--shadow-composer), 0 10px 34px -16px color-mix(in srgb, var(--ultra-c1) 70%, transparent),
+    0 0 26px -10px color-mix(in srgb, var(--ultra-c3) 55%, transparent);
+}
+
+@keyframes ultraSpin { to { --ultra-angle: 360deg; } }
+@keyframes ultraFade { from { opacity: 0; } }
+@keyframes ultraBreathe {
+  0%, 100% { box-shadow: 0 10px 26px -14px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 0 3px var(--accent-tint); }
+  50% { box-shadow: 0 12px 30px -10px color-mix(in srgb, var(--accent) 80%, transparent), 0 0 18px 2px color-mix(in srgb, var(--ultra-c3) 28%, transparent); }
+}
+@keyframes ultraSweep { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+@keyframes ultraBurst {
+  0% { opacity: 1; transform: rotate(var(--a)) translateX(4px) scale(1.2); }
+  100% { opacity: 0; transform: rotate(var(--a)) translateX(var(--d)) scale(0); }
+}
+@keyframes ultraBeam { 0% { background-position: -55% 0; } 70%, 100% { background-position: 155% 0; } }
+@keyframes ultraStepGlow {
+  0%, 30%, 100% { filter: none; transform: none; }
+  12% { filter: drop-shadow(0 0 5px var(--ultra-c1)); transform: scale(1.18); }
+}
+@keyframes ultraTileLine { 0%, 30%, 100% { opacity: 0; } 12% { opacity: 1; } }
+@keyframes ultraShimmer { from { background-position: 110% 0; } to { background-position: -110% 0; } }
+@keyframes ultraTwinkle { 0%, 100% { opacity: 0; transform: scale(0.3) rotate(0); } 50% { opacity: 1; transform: scale(1) rotate(45deg); } }
+@keyframes ultraSpark { 0% { transform: rotate(-30deg) scale(0.6); opacity: 0.4; } 70% { transform: rotate(8deg) scale(1.08); } 100% { transform: none; opacity: 1; } }
+@keyframes ultraStepIn { 0% { transform: scale(0.7); opacity: 0.3; } 100% { transform: none; opacity: 1; } }
+@keyframes ultraChipIn { from { opacity: 0; transform: translateY(2px) scale(0.96); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .effort *, .effort *::before, .effort *::after,
+  .ultra *, .ultra *::before, .ultra *::after, .ultra, .ultra::after, .ultra-chip, .ultra-chip *,
+  .composer::before, .composer-pill::before {
+    transition: none !important; animation: none !important;
+  }
+  /* Effects that only make sense while moving are hidden instead of frozen. */
+  .ultra-burst, .ultra-beam, .ultra-twinkle, .ultra.on::after,
+  .ultra.on .ultra-flow.detailed .ultra-step::after { display: none !important; }
+}

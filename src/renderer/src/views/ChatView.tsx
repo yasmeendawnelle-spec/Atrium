@@ -73,6 +73,8 @@ import {
 import { ApprovalCard } from '../components/ApprovalCard.tsx'
 import { Composer, type SlashAction } from '../components/Composer.tsx'
 import { Dialog } from '../components/Dialog.tsx'
+import { EffortMeter, EffortSlider } from '../components/EffortSlider.tsx'
+import { UltracodeChip, UltracodeToggle } from '../components/Ultracode.tsx'
 import { MessageList } from '../components/MessageList.tsx'
 import { Oculus, type OculusState } from '../components/Oculus.tsx'
 import { StudioDrawer, type StudioTab } from '../components/StudioDrawer.tsx'
@@ -105,6 +107,7 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
   const activeId = useStore((s) => s.settings?.activeProviderId ?? s.providers[0]?.id)
   const chatId = useStore((s) => s.activeChatId)
   const effort = useStore((s) => s.settings?.reasoningEffort ?? 'auto')
+  const ultracode = useStore((s) => s.settings?.ultracode === true)
   const active = providers.find((p) => p.id === activeId) ?? providers[0]
   const [open, setOpen] = useState(false)
   const [modelQuery, setModelQuery] = useState('')
@@ -191,7 +194,12 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
       >
         <span className="model-pick-dot" aria-hidden />
         <span className="model-pick-name">{active.model}</span>
-        {effort !== 'auto' && <span className="model-pick-effort">{t(`chat.effortLevels.${effort}`)}</span>}
+        {effort !== 'auto' && (
+          <span className="model-pick-effort" data-level={effort}>
+            <EffortMeter level={effort} size="sm" />
+            {t(`chat.effortLevels.${effort}`)}
+          </span>
+        )}
         <ChevronDown size={13} className="model-pick-chev" />
       </button>
       <div ref={popRef} style={popStyle} className="model-popover" role="listbox" aria-label={t('chat.model')}>
@@ -311,21 +319,20 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
           {providerGroups.length === 0 && <div className="model-popover-empty">未找到匹配的模型</div>}
         </div>
         <div className="model-effort-section">
-          <div className="model-popover-head">{t('chat.effort')}</div>
-          <div className="seg seg-compact seg-5" role="group" aria-label={t('chat.effort')}>
-            {(['auto', 'low', 'medium', 'high', 'xhigh'] as const).map((level) => (
-              <button
-                key={level}
-                type="button"
-                className={`seg-btn${effort === level ? ' active' : ''}`}
-                onClick={async () => {
-                  setState({ settings: await call('settings.update', { reasoningEffort: level }) })
-                }}
-              >
-                {t(`chat.effortLevels.${level}`)}
-              </button>
-            ))}
-          </div>
+          <EffortSlider
+            compact
+            title={t('chat.effort')}
+            value={effort}
+            onChange={async (level) => {
+              setState({ settings: await call('settings.update', { reasoningEffort: level }) })
+            }}
+          />
+          <UltracodeToggle
+            checked={ultracode}
+            onChange={async (next) => {
+              setState({ settings: await call('settings.update', { ultracode: next }) })
+            }}
+          />
         </div>
         <div className="model-popover-foot">
           <button
@@ -373,6 +380,7 @@ export function ChatView() {
   const allowBypass = useStore((s) => s.settings?.allowBypassPermissions !== false)
   const autoCompact = useStore((s) => s.settings?.autoCompact !== false)
   const contextWindowTokens = useStore((s) => s.settings?.contextWindowTokens)
+  const ultracodeOn = useStore((s) => s.settings?.ultracode === true)
   const changesRevision = useStore((s) => s.changesRevision)
   const terminalSessions = useStore((s) => s.terminalSessions)
   const terminalRequestedOpen = useStore((s) => s.terminalRequestedOpen)
@@ -884,7 +892,18 @@ export function ChatView() {
           </>
         ) : undefined
       }
-      trailing={<ModelPicker direction={direction} />}
+      trailing={
+        <>
+          {ultracodeOn && (
+            <UltracodeChip
+              onDisable={async () => {
+                setState({ settings: await call('settings.update', { ultracode: false }) })
+              }}
+            />
+          )}
+          <ModelPicker direction={direction} />
+        </>
+      }
       onSend={(text, images, documents: DocumentAttachment[]) => {
         updateDraft(chatId, () => EMPTY_DRAFT)
         void sendMessage(text, images, documents)
