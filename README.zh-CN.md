@@ -61,6 +61,17 @@
   - 离线沙箱实时渲染 React（JSX/TSX）、HTML、Mermaid 图表、Recharts 数据图、SVG 及结构化代码 Diff 审阅。
   - 集成可拖拽调整大小的真实 PTY 终端抽屉（`xterm.js`），与 Git 工作区 Diff、Worktree 分支隔离协作深度结合。
 
+- **6 档推理深度滑块与 Ultracode 多智能体工作流编排**
+  - 在桌面端与 CLI（`/effort`）中支持 6 档推理深度调节（`auto` / `low` / `medium` / `high` / `xhigh` / `max`），针对不同模型家族自动映射最优思考预算。
+  - 一键开启 **Ultracode**（`/ultracode` / `--ultracode`），自动执行 `Plan -> Explore -> Build -> Verify` 多子智能体协作流程，并启用 60 轮执行保底配额。
+
+- **声明式项目安全策略与敏感文件防泄漏护盾（`.atrium/policy.json`）**
+  - 默认拦截对 `.env*` 密钥、SSH/云凭证及私钥文件的读写，同时支持按项目/本地配置 `denyRead` / `allowRead` / `denyWrite` / `allowWrite`、命令黑白名单与沙箱下限（桌面端策略弹窗与 CLI `/policy`、`atrium policy` 全量支持）。
+
+- **托管本地开发服务器预览与平行 Worktree 舰队（桌面端与 CLI 1:1 对等）**
+  - 内置 `preview_start` / `preview_logs` / `preview_stop` 工具与 `/preview` 命令，自动捕获终端日志并联动内置 Chromium 面板实现实时调试与自动清理。
+  - 在桌面端 **Worktree 舰队指挥中心** 与 CLI（`/fleet`、`atrium fleet`）中同时派发、监控、查看 Diff、一键合并或丢弃多路并行隔离 Git Worktree 任务。
+
 - **项目知识库、跨会话长期记忆、自动化与极简快捷悬浮窗**
   - 基于 BM25 的项目文档检索（支持 PDF、Word、Excel、Markdown 等多格式索引与拖拽入库）与跨会话长期记忆自动提炼管理。
   - 支持 Cron / 固定间隔本地定时自动化任务。

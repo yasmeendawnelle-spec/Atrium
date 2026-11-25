@@ -61,6 +61,17 @@ Looking for ready-to-run desktop installers for **Windows**, **macOS**, or **Lin
   - Offline sandboxed preview for React/JSX/TSX, HTML, Mermaid diagrams, Recharts visualizations, SVG, and structured Git diff review.
   - Integrated resizable PTY terminal drawer (`@xterm/xterm`) and Git worktree session isolation.
 
+- **6-Level Reasoning Effort & Ultracode Multi-Agent Orchestration**
+  - Calibrate thinking depth across six levels (`auto`, `low`, `medium`, `high`, `xhigh`, `max`) via interactive sliders in both Desktop and CLI (`/effort`).
+  - Toggle **Ultracode** (`/ultracode` / `--ultracode`) to coordinate structured `Plan -> Explore -> Build -> Verify` multi-subagent workflows with a 60-round execution floor.
+
+- **Declarative Project Security Policy & Sensitive-File Shield (`.atrium/policy.json`)**
+  - Enforce default read/write shields over `.env*` secrets, SSH/cloud credentials, and private keys alongside custom `denyRead` / `allowRead` / `denyWrite` / `allowWrite`, `denyCommands` / `allowCommands`, and shell sandbox floor rules across Desktop and CLI (`/policy`, `atrium policy`).
+
+- **Managed Local Dev-Server Preview & Parallel Worktree Fleet (Desktop + CLI 1:1 Parity)**
+  - Start, tail logs from, and auto-open managed local dev servers (`preview_start` / `preview_logs` / `preview_stop`, `/preview`) directly inside Atrium's isolated Chromium preview panel.
+  - Launch, monitor, diff, merge, or discard isolated parallel Git worktree workers simultaneously in **Worktree Fleet Command Center** (`FleetModal`) and **Atrium CLI** (`/fleet`, `atrium fleet`).
+
 - **Knowledge Base, Long-Term Memory, Automations & Spotlight Quick Entry**
   - Local BM25 search across Markdown, code, PDF, DOCX, and XLSX documents plus cross-session memory extraction and management.
   - Cron and interval-based background automations.

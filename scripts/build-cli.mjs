@@ -24,7 +24,7 @@ export async function buildCliBundle() {
     platform: 'node',
     transform: {
       define: {
-        'process.env.ATRIUM_CLI_VERSION': JSON.stringify(pkg.version || '0.3.5'),
+        'process.env.ATRIUM_CLI_VERSION': JSON.stringify(pkg.version || '0.3.6'),
       },
     },
   })
