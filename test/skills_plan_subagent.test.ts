@@ -410,6 +410,8 @@ test('AgentLoop runs explorer subagents concurrently, streams live child steps, 
 test('AgentLoop abort propagates from parent turn into running subagent immediately', async () => {
   await withTempDirs(async ({ appDir, homeDir, workspace }) => {
     let signalSeenAborted = false
+    let childRequestStarted = false
+    let stopParent: (() => void) | null = null
     const server = createServer((req, res) => {
       let raw = ''
       req.on('data', (c) => (raw += c))
@@ -433,10 +435,15 @@ test('AgentLoop abort propagates from parent turn into running subagent immediat
           return
         }
         // Hang child stream until aborted.
+        childRequestStarted = true
         res.writeHead(200, { 'content-type': 'text/event-stream' })
-        req.on('close', () => {
+        res.flushHeaders()
+        const markAborted = () => {
           signalSeenAborted = true
-        })
+        }
+        req.on('close', markAborted)
+        res.on('close', markAborted)
+        setTimeout(() => stopParent?.(), 10)
       })
     })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
@@ -457,21 +464,24 @@ test('AgentLoop abort propagates from parent turn into running subagent immediat
         mcp,
         skills,
         emit: (ev) => {
-          if (ev.type === 'tool_status' && ev.toolCallId === 'sub_abort' && ev.status === 'running') {
-            setTimeout(() => loop.stop('conv_test'), 30)
-          }
           if (ev.type === 'turn_end') endReason = ev.reason
         },
         save: async () => undefined,
         systemPrompt,
       })
+      stopParent = () => loop.stop('conv_test')
 
       const conv = makeConv(workspace)
       await loop.run(conv, 'Abort me')
+      assert.equal(childRequestStarted, true)
       assert.equal(endReason, 'aborted')
-      await new Promise((r) => setTimeout(r, 20))
+      const deadline = Date.now() + 1000
+      while (!signalSeenAborted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 15))
+      }
       assert.equal(signalSeenAborted, true)
     } finally {
+      server.closeAllConnections?.()
       server.close()
     }
   })
