@@ -123,10 +123,11 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
     setExpandedVendors({})
   })
   const popStyle = useAnchoredPopover(wrapRef, popRef, open, {
-    width: 316,
+    width: 620,
     direction,
     align: 'right',
-    maxHeight: 460,
+    minHeight: 280,
+    maxHeight: 520,
   })
 
   if (!active) return null
@@ -184,6 +185,17 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
             if (v) {
               setExpandedProviders({})
               setExpandedVendors({})
+            } else {
+              const nextProviders: Record<string, boolean> = {}
+              const nextVendors: Record<string, boolean> = {}
+              if (active) {
+                nextProviders[active.id] = true
+                const activeList = (active.models?.length ? active.models : [active.model]).filter(Boolean)
+                const activeGroup = groupModelsByVendor(activeList).find((vg) => vg.models.includes(active.model))
+                if (activeGroup) nextVendors[`${active.id}::${activeGroup.id}`] = true
+              }
+              setExpandedProviders(nextProviders)
+              setExpandedVendors(nextVendors)
             }
             return !v
           })
@@ -203,19 +215,24 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
         <ChevronDown size={13} className="model-pick-chev" />
       </button>
       <div ref={popRef} style={popStyle} className="model-popover" role="listbox" aria-label={t('chat.model')}>
-        <div className="model-popover-head">{t('chat.switchModel')}</div>
-        {totalModels > 5 && (
-          <div className="model-popover-search">
-            <Search size={13} />
-            <input
-              value={modelQuery}
-              onChange={(e) => setModelQuery(e.target.value)}
-              placeholder="搜索模型或供应商…"
-              aria-label="搜索模型"
-            />
-          </div>
-        )}
-        <div className="model-popover-list">
+        <div className="model-popover-body">
+          <div className="model-popover-models">
+            <div className="model-popover-head">
+              <span>{t('chat.switchModel')}</span>
+              <span className="model-popover-total">{totalModels}</span>
+            </div>
+            {totalModels > 5 && (
+              <div className="model-popover-search">
+                <Search size={13} />
+                <input
+                  value={modelQuery}
+                  onChange={(e) => setModelQuery(e.target.value)}
+                  placeholder={t('chat.searchModels')}
+                  aria-label={t('chat.searchModels')}
+                />
+              </div>
+            )}
+            <div className="model-popover-list">
           {providerGroups.map((pg) => {
             const { provider: p, vendorGroups, totalCount } = pg
             const hasActiveProvider = p.id === active.id
@@ -316,23 +333,25 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
               </div>
             )
           })}
-          {providerGroups.length === 0 && <div className="model-popover-empty">未找到匹配的模型</div>}
-        </div>
-        <div className="model-effort-section">
-          <EffortSlider
-            compact
-            title={t('chat.effort')}
-            value={effort}
-            onChange={async (level) => {
-              setState({ settings: await call('settings.update', { reasoningEffort: level }) })
-            }}
-          />
-          <UltracodeToggle
-            checked={ultracode}
-            onChange={async (next) => {
-              setState({ settings: await call('settings.update', { ultracode: next }) })
-            }}
-          />
+          {providerGroups.length === 0 && <div className="model-popover-empty">{t('chat.noMatchingModels')}</div>}
+            </div>
+          </div>
+          <div className="model-effort-section">
+            <EffortSlider
+              compact
+              title={t('chat.effort')}
+              value={effort}
+              onChange={async (level) => {
+                setState({ settings: await call('settings.update', { reasoningEffort: level }) })
+              }}
+            />
+            <UltracodeToggle
+              checked={ultracode}
+              onChange={async (next) => {
+                setState({ settings: await call('settings.update', { ultracode: next }) })
+              }}
+            />
+          </div>
         </div>
         <div className="model-popover-foot">
           <button

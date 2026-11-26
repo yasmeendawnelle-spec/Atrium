@@ -39,6 +39,7 @@ export const en = {
     ctxSkillsDetails: 'Enabled skills ({{count}})',
     ctxNoItems: 'No items active',
     switchModel: 'Switch model', manageModels: 'Manage or add models…',
+    searchModels: 'Search models or providers…', noMatchingModels: 'No matching models found',
     thinking: 'Atrium is thinking…',
     thinkingDeep: 'Reasoning through the details…',
     thinkingTool: 'Running tool {{tool}}…',

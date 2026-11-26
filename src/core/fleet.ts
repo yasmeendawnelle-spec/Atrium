@@ -1,4 +1,5 @@
 // Multi-agent parallel Git worktree orchestrator (Codex-style Fleet Command Center).
+import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type {
   AgentEvent,
@@ -48,7 +49,14 @@ export interface FleetManagerDeps {
 
 function normPathKey(dir: string | undefined): string {
   if (!dir) return ''
-  const clean = resolve(dir).replace(/[\\/]+$/, '')
+  const resolved = resolve(dir)
+  let canonical = resolved
+  try {
+    canonical = realpathSync.native(resolved)
+  } catch {
+    canonical = resolved
+  }
+  const clean = canonical.replace(/[\\/]+$/, '')
   return process.platform === 'win32' ? clean.toLowerCase() : clean
 }
 

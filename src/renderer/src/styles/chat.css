@@ -1435,8 +1435,8 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 .model-pick.open .model-pick-chev { transform: rotate(180deg); color: var(--accent); }
 
 .model-popover {
-  position: fixed; width: min(312px, calc(100vw - 24px)); padding: 8px; z-index: 120;
-  display: flex; flex-direction: column; overflow: hidden; max-height: min(496px, calc(100vh - 32px));
+  position: fixed; width: min(620px, calc(100vw - 24px)); padding: 8px; z-index: 120;
+  display: flex; flex-direction: column; overflow: hidden; max-height: min(520px, calc(100vh - 32px));
   border-radius: 18px; background: var(--surface); border: 1px solid var(--line-strong);
   box-shadow: var(--shadow-float); opacity: 0; pointer-events: none; visibility: hidden;
   transition: opacity 0.2s var(--ease), transform 0.26s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.26s;
@@ -1445,8 +1445,14 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 .dir-up .model-popover { transform-origin: bottom right; transform: translateY(8px) scale(0.955); }
 .model-picker.open .model-popover { opacity: 1; pointer-events: auto; visibility: visible; transform: translateY(0) scale(1); }
 
-.model-popover-head { padding: 6px 10px 6px; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; flex: none; }
-.model-popover-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; padding-right: 2px; }
+.model-popover-body { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.model-popover-models { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding-right: 8px; }
+.model-popover-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px 6px; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; flex: none;
+}
+.model-popover-total { padding: 1px 6px; border-radius: 999px; background: var(--subtle); color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.model-popover-list { flex: 1 1 auto; min-height: 220px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; padding-right: 4px; }
 .model-option {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 12px;
   background: transparent; text-align: left; cursor: pointer; opacity: 0; transform: translateY(4px);
@@ -1466,7 +1472,6 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 .model-option-check { width: 18px; display: grid; place-items: center; color: var(--accent); flex: none; }
 .model-option-check svg { animation: list-check-pop 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
 
-.model-effort-section { flex: none; margin-top: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--line); }
 .model-effort-section .model-popover-head { padding: 2px 6px 6px; }
 .seg-compact { display: grid; grid-template-columns: repeat(4, 1fr); width: 100%; }
 .seg-compact.seg-5 { grid-template-columns: repeat(5, 1fr); }
@@ -3196,8 +3201,34 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 @keyframes effortSheen { from { background-position: 160% 0; } to { background-position: -60% 0; } }
 @keyframes effortPulse { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
 
-/* Model popover: effort + Ultracode section. */
-.model-effort-section { display: flex; flex-direction: column; gap: 10px; padding: 10px 8px 6px; }
+/* Model popover: effort + Ultracode section (side-by-side on desktop, stacked on narrow viewports). */
+.model-effort-section {
+  flex: none;
+  width: 286px;
+  margin-top: 0;
+  padding: 6px 6px 6px 12px;
+  border-top: 0;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow-y: auto;
+}
+@media (max-width: 660px) {
+  .model-popover { width: min(344px, calc(100vw - 24px)); }
+  .model-popover-body { flex-direction: column; overflow-y: auto; }
+  .model-popover-models { flex: none; padding-right: 0; }
+  .model-popover-list { min-height: 190px; max-height: 240px; }
+  .model-effort-section {
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px 6px 4px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    overflow-y: visible;
+  }
+}
 .model-pick-effort { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; color: var(--accent-text); }
 
 /* Settings: stacked rows give the slider and the Ultracode card the full width. */
@@ -3258,7 +3289,7 @@ body.is-resizing-studio iframe { pointer-events: none !important; }
 /* Compact: a pill bar of icon + word, chevrons between, spread evenly. */
 .ultra-flow {
   position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px;
-  margin: 0; padding: 7px 10px; list-style: none; border-radius: 10px;
+  overflow: hidden; margin: 0; padding: 7px 10px; border-radius: 10px;
   background: color-mix(in srgb, var(--accent) 5%, var(--bg)); box-shadow: inset 0 0 0 1px var(--line);
 }
 .ultra-step { display: flex; flex: none; align-items: center; gap: 4px; min-width: 0; color: var(--muted); }

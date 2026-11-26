@@ -14,12 +14,12 @@ const STEPS = [
 function UltracodeFlow({ detailed }: { detailed: boolean }) {
   const { t } = useTranslation()
   return (
-    <ol className={`ultra-flow${detailed ? ' detailed' : ''}`} aria-label={t('ultracode.flowLabel')}>
-      {!detailed && <li className="ultra-beam" role="presentation" aria-hidden />}
+    <div className={`ultra-flow${detailed ? ' detailed' : ''}`} role="list" aria-label={t('ultracode.flowLabel')}>
+      {!detailed && <span className="ultra-beam" aria-hidden />}
       {STEPS.map(({ key, Icon }, i) => (
         <Fragment key={key}>
-          {i > 0 && !detailed && <li className="ultra-sep" role="presentation" aria-hidden />}
-          <li className="ultra-step" style={{ '--step': i } as CSSProperties}>
+          {i > 0 && !detailed && <span className="ultra-sep" aria-hidden />}
+          <span className="ultra-step" role="listitem" style={{ '--step': i } as CSSProperties}>
             <span className="ultra-step-icon" aria-hidden>
               <Icon size={detailed ? 13 : 12} strokeWidth={2.2} />
             </span>
@@ -27,10 +27,10 @@ function UltracodeFlow({ detailed }: { detailed: boolean }) {
               <span className="ultra-step-label">{t(`ultracode.steps.${key}`)}</span>
               {detailed && <span className="ultra-step-hint">{t(`ultracode.stepHints.${key}`)}</span>}
             </span>
-          </li>
+          </span>
         </Fragment>
       ))}
-    </ol>
+    </div>
   )
 }
 

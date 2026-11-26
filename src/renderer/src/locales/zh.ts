@@ -41,6 +41,7 @@ export const zh: Strings = {
     ctxSkillsDetails: '启用技能 ({{count}})',
     ctxNoItems: '当前未注入额外条目',
     switchModel: '切换对话模型', manageModels: '管理或添加模型…',
+    searchModels: '搜索模型或供应商…', noMatchingModels: '未找到匹配的模型',
     thinking: 'Atrium 正在思考…',
     thinkingDeep: '正在深入推演…',
     thinkingTool: '正在调用工具 {{tool}}…',
