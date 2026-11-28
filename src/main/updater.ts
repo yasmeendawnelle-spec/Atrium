@@ -410,8 +410,8 @@ export class AppUpdaterController {
     try {
       await this.beforeInstall?.()
     } finally {
-      // false = show installer / cleanly replace files; true = relaunch app automatically afterward
-      this.updater.quitAndInstall(false, true)
+      // true = silent in-place upgrade without interactive wizard prompts; true = relaunch app automatically afterward
+      this.updater.quitAndInstall(true, true)
     }
   }
 

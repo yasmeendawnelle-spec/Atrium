@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   AppUpdaterController,
   formatReleaseNotes,
@@ -186,7 +188,7 @@ test('AppUpdaterController transitions through download to Restart to upgrade an
 
   await ctrl.installUpdate()
   assert.deepEqual(callOrder, ['beforeInstall', 'quitAndInstall'])
-  assert.deepEqual(mock.quitAndInstallArgs, [{ isSilent: false, isForceRunAfter: true }])
+  assert.deepEqual(mock.quitAndInstallArgs, [{ isSilent: true, isForceRunAfter: true }])
 })
 
 test('AppUpdaterController supports manual download when autoUpdate is disabled', async (t) => {
@@ -300,4 +302,18 @@ test('AppUpdaterController suppresses autoDownload when background check matches
   assert.equal(observedAutoDownloadDuringAvailable, false)
   // Restored cleanly afterward for any newer non-skipped release
   assert.equal(mock.autoDownload, true)
+})
+
+test('Windows NSIS installer config enforces silent --updated upgrades and skips redundant mode prompt', () => {
+  const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
+  const nshPath = join(repoRoot, 'build', 'installer.nsh')
+  const ymlPath = join(repoRoot, 'electron-builder.yml')
+
+  assert.equal(existsSync(nshPath), true)
+  const nsh = readFileSync(nshPath, 'utf8')
+  assert.match(nsh, /!macro\s+customInit[\s\S]*\$\{isUpdated\}[\s\S]*SetSilent\s+silent/)
+  assert.match(nsh, /!macro\s+customInstallMode[\s\S]*!ifndef\s+BUILD_UNINSTALLER[\s\S]*\$isForceCurrentInstall[\s\S]*\$isForceMachineInstall/)
+
+  const builderYml = readFileSync(ymlPath, 'utf8')
+  assert.match(builderYml, /include:\s*build\/installer\.nsh/)
 })
