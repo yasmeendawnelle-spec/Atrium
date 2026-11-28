@@ -65,6 +65,18 @@ Looking for ready-to-run desktop installers for **Windows**, **macOS**, or **Lin
   - Calibrate thinking depth across six levels (`auto`, `low`, `medium`, `high`, `xhigh`, `max`) via interactive sliders in both Desktop and CLI (`/effort`).
   - Toggle **Ultracode** (`/ultracode` / `--ultracode`) to coordinate structured `Plan -> Explore -> Build -> Verify` multi-subagent workflows with a 60-round execution floor.
 
+- **Dual-Model Orchestrator & Live Structured Task Plan Progress (`v1.0.0`)**
+  - Pair a frontier **Planning Model** with a fast **Execution Model** across explicit `Plan -> Execute -> Plan Review` phases (`exit_plan_mode` / `request_plan_review`) while keeping cross-model replay history clean.
+  - Built-in `update_plan` tool streams real-time task progress (`pending` / `in_progress` / `done` / `skipped` / `failed`), active focus, and completion percentage into a collapsible checklist dock above the composer and CLI status output.
+
+- **Multi-Agent Collaboration Platform & External Session Importer (`v1.0.0`)**
+  - Coordinate specialized multi-agent rooms, role assignments, and cross-agent message buses in **Agent Platform** (`PlatformView`).
+  - Discover and import existing sessions seamlessly from **Claude Code**, **OpenAI Codex**, **OpenCode**, and **Antigravity** into Atrium chats.
+
+- **Official Plugin Marketplace v2 & Rhine Lab 3D Archive Mode (`v1.0.0`)**
+  - Curated **Co-contributor Official Showcase**, moderated community submissions (`market.rpulse.top`), plus declarative CSS theme & boot animation bundles.
+  - Ships with the official **Rhine Lab · 莱茵生命** plugin authored by **Lucas Qiu** (`plugins/rhine-lab-theme`), featuring optical-acrylic daylight/slate themes, tactile Web Audio synthesis, live 3D Three.js PBR CAD backdrop, and full **3D Archive Extraction Mode** (`Ctrl+Shift+A`).
+
 - **Declarative Project Security Policy & Sensitive-File Shield (`.atrium/policy.json`)**
   - Enforce default read/write shields over `.env*` secrets, SSH/cloud credentials, and private keys alongside custom `denyRead` / `allowRead` / `denyWrite` / `allowWrite`, `denyCommands` / `allowCommands`, and shell sandbox floor rules across Desktop and CLI (`/policy`, `atrium policy`).
 

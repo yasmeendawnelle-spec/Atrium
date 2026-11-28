@@ -65,6 +65,18 @@
   - 在桌面端与 CLI（`/effort`）中支持 6 档推理深度调节（`auto` / `low` / `medium` / `high` / `xhigh` / `max`），针对不同模型家族自动映射最优思考预算。
   - 一键开启 **Ultracode**（`/ultracode` / `--ultracode`），自动执行 `Plan -> Explore -> Build -> Verify` 多子智能体协作流程，并启用 60 轮执行保底配额。
 
+- **双模型指挥官（Orchestrator）与原生实时任务计划进度系统（`v1.0.0`）**
+  - 支持将高阶 **规划模型（Planner）** 与高速 **执行模型（Executor）** 自动编排协同，在严格的 `Plan -> Execute -> Plan Review` 状态机之间无缝交接并清理跨模型重放载荷。
+  - 内置 `update_plan` 工具会在多步骤任务中实时向输入框上方 Dock 与 CLI 终端同步 `focus`、步骤状态（`pending` / `in_progress` / `done` / `skipped` / `failed`）与完成进度百分比，并在重生成/分支/回溯时自动重算对齐。
+
+- **多智能体协作平台与外部会话一键导入（`v1.0.0`）**
+  - 全新 **Agent 平台（PlatformView）** 支持编排多角色协作会话、指令分发与跨智能体事件总线。
+  - 支持一键发现并导入本机 **Claude Code**、**Codex**、**OpenCode** 与 **Antigravity** 历史会话。
+
+- **插件市场 v2 与「莱茵生命 · Rhine Lab」官方主题套件（`v1.0.0`）**
+  - 推出官方 **Co-contributor 精选展区** 与社区插件审核发布流（`market.rpulse.top`），支持声明式主题、开机动画与工作区背景特效。
+  - 由 **Lucas Qiu** 贡献官方 **Rhine Lab · 莱茵生命** 插件（`plugins/rhine-lab-theme`），内置温润石灰岩/深矿石双极性主题、光学亚克力卡片、Web Audio 玻璃音效、工作台实时 3D PBR CAD 背景以及全屏 **3D 档案提取模式**（`Ctrl+Shift+A`）。
+
 - **声明式项目安全策略与敏感文件防泄漏护盾（`.atrium/policy.json`）**
   - 默认拦截对 `.env*` 密钥、SSH/云凭证及私钥文件的读写，同时支持按项目/本地配置 `denyRead` / `allowRead` / `denyWrite` / `allowWrite`、命令黑白名单与沙箱下限（桌面端策略弹窗与 CLI `/policy`、`atrium policy` 全量支持）。
 

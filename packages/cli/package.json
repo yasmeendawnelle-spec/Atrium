@@ -1,6 +1,6 @@
 {
   "name": "@atrium-ai/cli",
-  "version": "0.3.7",
+  "version": "1.0.0",
   "description": "Atrium CLI — Cross-platform AI Agent Workbench (Windows / macOS / Linux)",
   "license": "MIT",
   "bin": {
