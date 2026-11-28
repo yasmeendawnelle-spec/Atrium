@@ -5,18 +5,21 @@
 import { join } from 'node:path'
 import { RpcPeer, errorText, type Handler } from '../shared/rpc.ts'
 import type { CoreEvent, CoreMethods } from '../shared/ipc.ts'
+import { derivePlanFromMessages } from '../shared/plan.ts'
 import type { DocumentAttachment, ImageAttachment, ProviderDraft } from '../shared/types.ts'
 import { bindSecrets, type HostCall } from './secrets.ts'
 import { RelayPulseAccountManager } from './account.ts'
 import { systemPrompt } from './prompt.ts'
 import { configureNetwork } from './net.ts'
 import { SettingsStore } from './settings.ts'
+import { createCoreEventCoalescer } from './streamCoalescer.ts'
 import { McpManager } from './mcp/manager.ts'
 import { parseConfigText } from './mcp/parse.ts'
 import { PluginManager } from './plugins.ts'
-import { importGithub, searchRegistry } from './market.ts'
+import { importGithub, MarketHub, searchRegistry } from './market.ts'
 import { newId } from './store.ts'
 import { ChatStore } from './chats.ts'
+import { discoverExternalSessions, importExternalSessions } from './sessionImport.ts'
 import { AgentLoop } from './agent.ts'
 import { AutomationManager, previewCronRuns } from './automations.ts'
 import { KnowledgeBaseManager } from './knowledge.ts'
@@ -35,6 +38,7 @@ import {
 } from './policy.ts'
 import { PreviewServerManager } from './preview.ts'
 import { WorktreeFleetManager } from './fleet.ts'
+import { PlatformManager } from './platform/manager.ts'
 import type { BrowserHostBridge } from './tools/browser_tools.ts'
 import type { ComputerHostBridge } from './tools/computer_tools.ts'
 import { chat, endpointFor, fetchProviderModels, testConnection } from './providers/index.ts'
@@ -133,8 +137,12 @@ async function main(): Promise<void> {
   const checkpoints = new CheckpointStore(dataDir)
 
   const windows = new Set<RpcPeer>()
-  const emit = (event: CoreEvent) => {
+  const sendToWindows = (event: CoreEvent) => {
     for (const peer of windows) peer.emit(event.channel, event.payload)
+  }
+  const coalescer = createCoreEventCoalescer(sendToWindows, 16)
+  const emit = (event: CoreEvent) => {
+    coalescer.emit(event)
   }
 
   const mcp = new McpManager(
@@ -202,6 +210,12 @@ async function main(): Promise<void> {
       void settings.update({ disabledSkills })
     },
   })
+  const marketHub = new MarketHub({
+    getAuthToken: () => account.getSessionToken(),
+    getAccountState: () => account.getState(),
+    getWorkspace: () => settings.get().workspace,
+    plugins,
+  })
   const skills = new SkillsManager({
     appDir: dir,
     getDisabled: () => settings.get().disabledSkills ?? [],
@@ -227,10 +241,18 @@ async function main(): Promise<void> {
     emit: (payload) => {
       emit({ channel: 'agent', payload })
       if (payload.type === 'message_saved' && payload.message.role === 'assistant' && payload.message.usage) {
-        const provider = settings.activeProvider()
-        if (provider?.managedBy === 'relaypulse') {
-          void account.recordSubscriptionUsage(provider.model, payload.message.usage).catch(() => undefined)
+        const provider = payload.message.providerId
+          ? settings.getProvider(payload.message.providerId)
+          : settings.activeProvider()
+        const billedModel = payload.message.model ?? provider?.model
+        if (provider?.managedBy === 'relaypulse' && billedModel) {
+          void account.recordSubscriptionUsage(billedModel, payload.message.usage).catch(() => undefined)
         }
+      }
+    },
+    onBeforeModelCall: async (provider, model) => {
+      if (provider.managedBy === 'relaypulse') {
+        await account.ensureKeyGroupForModel(model).catch(() => undefined)
       }
     },
     save: async (conversation) => {
@@ -246,7 +268,21 @@ async function main(): Promise<void> {
     },
     systemPrompt,
   })
-  emergencyStop = () => agent.stopAll()
+  const platform = new PlatformManager({
+    dir,
+    dataDir,
+    settings,
+    onBeforeModelCall: async (provider, model) => {
+      if (provider.managedBy === 'relaypulse') {
+        await account.ensureKeyGroupForModel(model).catch(() => undefined)
+      }
+    },
+    emit: (payload) => emit({ channel: 'platform', payload }),
+  })
+  emergencyStop = () => {
+    agent.stopAll()
+    platform.stopAll()
+  }
 
   const fleet = new WorktreeFleetManager({
     chats,
@@ -396,6 +432,17 @@ async function main(): Promise<void> {
     'automations.previewCron': (expr, count) => previewCronRuns(expr, count),
     'market.search': (query, cursor) => searchRegistry(query, cursor),
     'market.importGithub': (url) => importGithub(url),
+    'market.catalog': () => marketHub.catalog(),
+    'market.me': () => marketHub.me(),
+    'market.searchAll': (query, scope) => marketHub.searchAll(query, scope),
+    'market.pluginDetail': (id) => marketHub.pluginDetail(id),
+    'market.inspectLocalFolder': (folderPath) => plugins.packLocalFolder(folderPath),
+    'market.submit': (req) => marketHub.submit(req),
+    'market.mySubmissions': () => marketHub.mySubmissions(),
+    'market.reviewQueue': () => marketHub.reviewQueue(),
+    'market.reviewDecision': (id, req) => marketHub.reviewDecision(id, req),
+    'market.deleteSubmission': (id) => marketHub.deleteSubmission(id),
+    'market.installPlugin': (id) => marketHub.installPlugin(id),
     'system.runtimes': () => detectRuntimes(),
     'chats.list': () => chats.list(),
     'chats.get': (id) => chats.get(id),
@@ -489,10 +536,33 @@ async function main(): Promise<void> {
         revertFiles && ws ? await checkpoints.rewindToTurn(conversationId, ws, messageIndex) : []
       if (ws && revertedFiles.length > 0) invalidateWorkspaceFilesCache(ws)
       conversation.messages = conversation.messages.slice(0, messageIndex)
+      const rewoundPlan = derivePlanFromMessages(conversation.messages)
+      if (rewoundPlan) conversation.plan = rewoundPlan
+      else delete conversation.plan
       await chats.save(conversation)
       emit({ channel: 'chats', payload: chats.list() })
       emit({ channel: 'agent', payload: { type: 'conversation_sync', conversation } })
       return { conversation, draftText, revertedFiles }
+    },
+    'sessions.discover': (opts) =>
+      discoverExternalSessions({
+        chats,
+        workspace: opts?.workspace ?? settings.get().workspace,
+        recentWorkspaces: settings.get().recentWorkspaces,
+        folderPath: opts?.folderPath,
+      }),
+    'sessions.import': async (items, opts) => {
+      const res = await importExternalSessions({
+        chats,
+        settings,
+        items,
+        workspaceOverride: opts?.workspaceOverride,
+        overwriteExisting: opts?.overwriteExisting,
+      })
+      if (res.imported.length > 0) {
+        emit({ channel: 'chats', payload: chats.list() })
+      }
+      return res
     },
     'agent.send': async (conversationId, text, images, documents) => {
       requireAccount()
@@ -611,6 +681,7 @@ async function main(): Promise<void> {
     'plugins.importGithub': (repoUrl) => plugins.importGithub(repoUrl),
     'plugins.setEnabled': (id, enabled) => plugins.setEnabled(id, enabled),
     'plugins.remove': (id) => plugins.remove(id),
+    'plugins.activeTheme': () => plugins.getActiveTheme(),
     'sandbox.info': () => detectSandboxCapabilities(),
     'memory.list': (workspace) => memory.list(workspace),
     'memory.save': (draft) => memory.save(draft),
@@ -673,6 +744,24 @@ async function main(): Promise<void> {
     'fleet.merge': (conversationId, opts) => fleet.merge(conversationId, opts),
     'fleet.discard': (conversationId) => fleet.discard(conversationId),
     'fleet.stopAll': (baseWorkspace) => fleet.stopAll(baseWorkspace),
+    'platform.scan': () => platform.scanAgents(),
+    'platform.agents': () => platform.getAgents(),
+    'platform.agentModels': (agentId, refresh) => platform.getAgentModels(agentId, refresh),
+    'platform.updateAgent': (agentId, patch) => platform.updateAgent(agentId, patch),
+    'platform.saveCustomAgent': (draft) => platform.saveCustomAgent(draft),
+    'platform.removeCustomAgent': (agentId) => platform.removeCustomAgent(agentId),
+    'platform.sessions': () => platform.listSessions(),
+    'platform.getSession': (sessionId) => platform.getSession(sessionId),
+    'platform.startSession': (req) => platform.startSession(req),
+    'platform.sendFollowup': (sessionId, taskId, prompt) => platform.sendFollowup(sessionId, taskId, prompt),
+    'platform.postBoardNote': (sessionId, note) => platform.postBoardNote(sessionId, note),
+    'platform.stopTask': (sessionId, taskId) => platform.stopTask(sessionId, taskId),
+    'platform.stopSession': (sessionId) => platform.stopSession(sessionId),
+    'platform.stopAll': () => platform.stopAll(),
+    'platform.deleteSession': (sessionId) => platform.deleteSession(sessionId),
+    'platform.diffTask': (sessionId, taskId) => platform.diffTask(sessionId, taskId),
+    'platform.mergeWorktree': (sessionId, taskId, opts) => platform.mergeWorktree(sessionId, taskId, opts),
+    'platform.discardWorktree': (sessionId, taskId) => platform.discardWorktree(sessionId, taskId),
     'stats.usage': () => chats.summarizeUsage(),
   }
   const table = handlers as unknown as Record<string, Handler>
@@ -691,6 +780,7 @@ async function main(): Promise<void> {
   await mcp.load()
   await memory.load()
   await automations.load()
+  await platform.load()
   automations.startScheduler()
   if (settings.get().quickEntryShortcut) {
     void callHost('app.updateQuickShortcut', settings.get().quickEntryShortcut!).catch(() => undefined)
@@ -702,6 +792,8 @@ async function main(): Promise<void> {
   shutdown = () => {
     if (stopping) return
     stopping = true
+    coalescer.dispose()
+    platform.shutdown()
     automations.shutdown()
     previews.shutdown()
     terminal.shutdown()

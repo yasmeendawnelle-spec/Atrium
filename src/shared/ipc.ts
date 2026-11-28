@@ -1,6 +1,7 @@
 // The typed surface between renderer, main, and the core process.
 // The preload exposes exactly these methods. Main forwards `CoreMethods` to the core process.
 import type {
+  ActivePluginThemePayload,
   AgentEvent,
   ApprovalDecision,
   AppSettings,
@@ -18,6 +19,8 @@ import type {
   DesktopSnapshot,
   DesktopWindowInput,
   DocumentAttachment,
+  ExternalSessionImportTarget,
+  ExternalSessionScanResult,
   GitCommitResult,
   GitHubIssueSummary,
   GitPrUrlResult,
@@ -36,7 +39,17 @@ import type {
   ImageAttachment,
   InstalledPlugin,
   InstallOption,
+  MarketCatalogResult,
+  MarketIdentity,
+  MarketLocalPackPreview,
+  MarketPluginDetail,
+  MarketPluginListing,
+  MarketReviewDecisionRequest,
+  MarketReviewQueueResult,
   MarketSearchResult,
+  MarketSearchScope,
+  MarketSubmitRequest,
+  MarketUnifiedSearchResult,
   McpPromptInfo,
   McpPromptResult,
   McpResourceContent,
@@ -57,6 +70,7 @@ import type {
   RewindResult,
   RuntimeInfo,
   SandboxCapabilities,
+  SessionImportResult,
   SpeechTranscribeRequest,
   SpeechTranscribeResult,
   SubscriptionCategory,
@@ -80,6 +94,19 @@ import type {
   PreviewServerInfo,
   ProjectPolicyConfig,
 } from './studio_features.ts'
+import type {
+  PlatformAgentProfile,
+  PlatformAgentUpdatePatch,
+  PlatformBoardNote,
+  PlatformCustomAgentDraft,
+  PlatformEvent,
+  PlatformModelOption,
+  PlatformSession,
+  PlatformSessionSummary,
+  PlatformStartSessionRequest,
+  PlatformTask,
+  PlatformTaskDiffResult,
+} from './platform.ts'
 
 export interface ProviderTestResult {
   ok: boolean
@@ -133,6 +160,17 @@ export interface CoreMethods {
 
   'market.search': (query: string, cursor?: string) => MarketSearchResult
   'market.importGithub': (url: string) => GithubImportResult
+  'market.catalog': () => MarketCatalogResult
+  'market.me': () => MarketIdentity
+  'market.searchAll': (query: string, scope?: MarketSearchScope) => MarketUnifiedSearchResult
+  'market.pluginDetail': (id: string) => MarketPluginDetail
+  'market.inspectLocalFolder': (folderPath: string) => MarketLocalPackPreview
+  'market.submit': (req: MarketSubmitRequest) => MarketPluginListing
+  'market.mySubmissions': () => MarketPluginListing[]
+  'market.reviewQueue': () => MarketReviewQueueResult
+  'market.reviewDecision': (id: string, req: MarketReviewDecisionRequest) => MarketPluginListing
+  'market.deleteSubmission': (id: string) => void
+  'market.installPlugin': (id: string) => PluginImportResult
 
   'system.runtimes': () => RuntimeInfo[]
   'stats.usage': () => UsageSummary
@@ -150,6 +188,11 @@ export interface CoreMethods {
   'chats.setArchived': (id: string, archived: boolean) => ConversationMeta
   'chats.archiveGroup': (ids: string[], archived: boolean) => ConversationMeta[]
   'chats.rewind': (conversationId: string, messageIndex: number, revertFiles?: boolean) => RewindResult
+  'sessions.discover': (opts?: { workspace?: string; folderPath?: string }) => ExternalSessionScanResult
+  'sessions.import': (
+    items: ExternalSessionImportTarget[],
+    opts?: { workspaceOverride?: string; overwriteExisting?: boolean },
+  ) => SessionImportResult
   'agent.send': (conversationId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]) => void
   'agent.enqueue': (conversationId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]) => QueuedMessage[]
   'agent.cancelQueued': (conversationId: string, queuedId: string) => QueuedMessage[]
@@ -191,6 +234,7 @@ export interface CoreMethods {
   'plugins.importGithub': (repoUrl: string) => PluginImportResult
   'plugins.setEnabled': (id: string, enabled: boolean) => InstalledPlugin[]
   'plugins.remove': (id: string) => void
+  'plugins.activeTheme': () => ActivePluginThemePayload | null
   'sandbox.info': () => SandboxCapabilities
   'memory.list': (workspace?: string) => MemoryItem[]
   'memory.save': (draft: MemoryDraft) => MemoryItem
@@ -271,6 +315,31 @@ export interface CoreMethods {
   'account.setAvatar': (avatar: string | null) => RelayPulseAccountState
   'account.syncModels': () => RelayPulseAccountState
   'account.logout': () => RelayPulseAccountState
+  'platform.scan': () => PlatformAgentProfile[]
+  'platform.agents': () => PlatformAgentProfile[]
+  'platform.agentModels': (agentId: string, refresh?: boolean) => PlatformModelOption[]
+  'platform.updateAgent': (agentId: string, patch: PlatformAgentUpdatePatch) => PlatformAgentProfile[]
+  'platform.saveCustomAgent': (draft: PlatformCustomAgentDraft) => PlatformAgentProfile[]
+  'platform.removeCustomAgent': (agentId: string) => PlatformAgentProfile[]
+  'platform.sessions': () => PlatformSessionSummary[]
+  'platform.getSession': (sessionId: string) => PlatformSession | null
+  'platform.startSession': (req: PlatformStartSessionRequest) => PlatformSession
+  'platform.sendFollowup': (sessionId: string, taskId: string, prompt: string) => PlatformTask
+  'platform.postBoardNote': (
+    sessionId: string,
+    note: { title: string; content: string; kind?: PlatformBoardNote['kind'] },
+  ) => PlatformBoardNote
+  'platform.stopTask': (sessionId: string, taskId: string) => boolean
+  'platform.stopSession': (sessionId: string) => boolean
+  'platform.stopAll': () => number
+  'platform.deleteSession': (sessionId: string) => boolean
+  'platform.diffTask': (sessionId: string, taskId: string) => PlatformTaskDiffResult
+  'platform.mergeWorktree': (
+    sessionId: string,
+    taskId: string,
+    opts?: { commitMessage?: string; cleanupWorktree?: boolean },
+  ) => WorktreeMergeResult
+  'platform.discardWorktree': (sessionId: string, taskId: string) => PlatformTask | null
 }
 
 export type CoreMethod = keyof CoreMethods
@@ -310,6 +379,17 @@ export const CORE_METHODS: readonly CoreMethod[] = [
   'automations.previewCron',
   'market.search',
   'market.importGithub',
+  'market.catalog',
+  'market.me',
+  'market.searchAll',
+  'market.pluginDetail',
+  'market.inspectLocalFolder',
+  'market.submit',
+  'market.mySubmissions',
+  'market.reviewQueue',
+  'market.reviewDecision',
+  'market.deleteSubmission',
+  'market.installPlugin',
   'system.runtimes',
   'stats.usage',
   'chats.list',
@@ -325,6 +405,8 @@ export const CORE_METHODS: readonly CoreMethod[] = [
   'chats.setArchived',
   'chats.archiveGroup',
   'chats.rewind',
+  'sessions.discover',
+  'sessions.import',
   'agent.send',
   'agent.enqueue',
   'agent.cancelQueued',
@@ -366,6 +448,7 @@ export const CORE_METHODS: readonly CoreMethod[] = [
   'plugins.importGithub',
   'plugins.setEnabled',
   'plugins.remove',
+  'plugins.activeTheme',
   'sandbox.info',
   'memory.list',
   'memory.save',
@@ -416,6 +499,24 @@ export const CORE_METHODS: readonly CoreMethod[] = [
   'account.setAvatar',
   'account.syncModels',
   'account.logout',
+  'platform.scan',
+  'platform.agents',
+  'platform.agentModels',
+  'platform.updateAgent',
+  'platform.saveCustomAgent',
+  'platform.removeCustomAgent',
+  'platform.sessions',
+  'platform.getSession',
+  'platform.startSession',
+  'platform.sendFollowup',
+  'platform.postBoardNote',
+  'platform.stopTask',
+  'platform.stopSession',
+  'platform.stopAll',
+  'platform.deleteSession',
+  'platform.diffTask',
+  'platform.mergeWorktree',
+  'platform.discardWorktree',
 ]
 
 /** Methods the core process calls on main (things only main can do). */
@@ -458,6 +559,7 @@ export type CoreEvent =
   | { channel: 'app'; payload: { action: 'open_chat'; conversationId: string } | { action: 'focus_quick_input' } }
   /** Sent by main when application auto-update state changes. */
   | { channel: 'updater'; payload: UpdateState }
+  | { channel: 'platform'; payload: PlatformEvent }
   /** Sent by the preload after the core restarted, so the UI reloads its data. */
   | { channel: 'core'; payload: { state: 'reconnected' } }
 
@@ -483,6 +585,7 @@ export interface ShellMethods {
   'app.openBrowserWindow': (url?: string) => void
   'app.syncBrowserView': (layout: BrowserViewLayout | null) => void
   'app.dockBrowserView': () => void
+  'app.readArchiveModel': (name: 'archive-cassette.glb' | 'archive-assembly.glb') => Uint8Array | null
 }
 
 type Promisify<T> = {
@@ -512,6 +615,7 @@ export interface AtriumApi {
     openBrowserWindow: ShellMethods['app.openBrowserWindow']
     syncBrowserView: ShellMethods['app.syncBrowserView']
     dockBrowserView: ShellMethods['app.dockBrowserView']
+    readArchiveModel: ShellMethods['app.readArchiveModel']
   }> & {
     /** Tells main to recolour the window buttons (Windows and Linux) after a theme change. */
     setTitleBarTheme(dark: boolean): void

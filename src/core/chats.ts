@@ -4,10 +4,14 @@ import type {
   Conversation,
   ConversationMeta,
   ConversationUsageTotals,
+  ExternalAgentSource,
+  ImportedSessionOrigin,
+  Message,
   SceneUsageBreakdown,
   UsageSummary,
   WorkScene,
 } from '../shared/types.ts'
+import { derivePlanFromMessages } from '../shared/plan.ts'
 import { BlobStore } from './blobs.ts'
 import { newId, readJson, removeFile, writeJson } from './store.ts'
 
@@ -205,6 +209,8 @@ export class ChatStore {
     const baseTitle = src.title?.trim() || titleFrom(src)
     const now = Date.now()
     const suffix = titleSuffix.trim() || 'branch'
+    const forkedMessages = structuredClone(src.messages.slice(0, end))
+    const forkedPlan = derivePlanFromMessages(forkedMessages)
     const forked: Conversation = {
       id: newId('chat'),
       title: `${baseTitle} (${suffix})`,
@@ -215,11 +221,57 @@ export class ChatStore {
       ...(src.workspace ? { workspace: src.workspace } : {}),
       forkedFromId: src.id,
       forkedFromTitle: baseTitle,
-      messages: structuredClone(src.messages.slice(0, end)),
+      ...(forkedPlan ? { plan: forkedPlan } : {}),
+      messages: forkedMessages,
     }
     this.index.push(meta(forked))
     await this.persist(forked)
     return forked
+  }
+
+  findByExternalOrigin(source: ExternalAgentSource, externalId: string): ConversationMeta | undefined {
+    return this.index.find((m) => m.importedFrom?.source === source && m.importedFrom?.externalId === externalId)
+  }
+
+  async importConversation(input: {
+    title: string
+    messages: Message[]
+    workspace?: string
+    providerId?: string
+    createdAt?: number
+    updatedAt?: number
+    importedFrom: ImportedSessionOrigin
+    replaceExistingId?: string
+  }): Promise<Conversation> {
+    const now = Date.now()
+    const createdAt =
+      typeof input.createdAt === 'number' && Number.isFinite(input.createdAt) && input.createdAt > 0
+        ? input.createdAt
+        : now
+    const updatedAt =
+      typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt) && input.updatedAt > 0
+        ? Math.max(createdAt, input.updatedAt)
+        : Math.max(createdAt, now)
+    const explicitTitle = input.title.trim()
+    const base: Conversation = {
+      id: input.replaceExistingId ?? newId('chat'),
+      title: explicitTitle,
+      createdAt,
+      updatedAt,
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.workspace ? { workspace: input.workspace } : {}),
+      importedFrom: input.importedFrom,
+      messages: structuredClone(input.messages),
+    }
+    if (!base.title) {
+      base.title = titleFrom(base)
+      base.titleSource = 'heuristic'
+    } else {
+      base.titleSource = 'user'
+    }
+    this.upsertMeta(base)
+    await this.persist(base)
+    return base
   }
 
   private upsertMeta(conversation: Conversation): ConversationMeta {
@@ -452,6 +504,7 @@ function meta(conversation: Conversation): ConversationMeta {
     ...(conversation.worktreeBaseBranch ? { worktreeBaseBranch: conversation.worktreeBaseBranch } : {}),
     ...(conversation.forkedFromId ? { forkedFromId: conversation.forkedFromId } : {}),
     ...(conversation.forkedFromTitle ? { forkedFromTitle: conversation.forkedFromTitle } : {}),
+    ...(conversation.importedFrom ? { importedFrom: conversation.importedFrom } : {}),
     ...(conversation.pinned ? { pinned: true } : {}),
     ...(conversation.archived ? { archived: true } : {}),
     ...(conversation.diffStats ? { diffStats: conversation.diffStats } : {}),

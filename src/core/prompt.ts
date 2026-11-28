@@ -1,21 +1,33 @@
-import { normalizeAgentMode, type AgentMode, type WorkScene } from '../shared/types.ts'
+import { normalizeAgentMode, type AgentMode, type ExecMode, type OrchestratorPhase, type WorkScene } from '../shared/types.ts'
+import { orchestratorDirective } from './orchestrator.ts'
+
+export interface SystemPromptOptions {
+  mode?: AgentMode
+  workScene?: WorkScene
+  skillsSummary?: string
+  pluginRules?: string
+  memoryPrompt?: string
+  knowledgePrompt?: string
+  computerUse?: boolean
+  browserComputerUse?: boolean
+  desktopControl?: boolean
+  /** Ultracode: plan a multi-subagent workflow for each substantive task. */
+  ultracode?: boolean
+  /** Dual-Model Orchestrator active phase metadata. */
+  orchestrator?: {
+    phase: OrchestratorPhase
+    plannerModel: string
+    executorModel: string
+    handoffCount: number
+    maxHandoffs: number
+    execMode: ExecMode
+  }
+}
 
 export function systemPrompt(
   workspace: string | undefined,
   projectNotes?: string,
-  opts?: {
-    mode?: AgentMode
-    workScene?: WorkScene
-    skillsSummary?: string
-    pluginRules?: string
-    memoryPrompt?: string
-    knowledgePrompt?: string
-    computerUse?: boolean
-    browserComputerUse?: boolean
-    desktopControl?: boolean
-    /** Ultracode: plan a multi-subagent workflow for each substantive task. */
-    ultracode?: boolean
-  },
+  opts?: SystemPromptOptions,
 ): string {
   const today = new Date().toISOString().slice(0, 10)
   const mode = normalizeAgentMode(opts?.mode, 'auto')
@@ -42,9 +54,16 @@ export function systemPrompt(
     'When generating a rich standalone interactive web widget, React app, SVG graphic, or Mermaid architecture diagram meant for live preview, wrap it in `<artifact type="html|react|svg|mermaid" title="Concise Title">...</artifact>`.',
     'For `type="react"` artifacts (TSX/JSX with `export default function App()`), Atrium bundles an offline runtime with `react`, `lucide-react`, `recharts` charts (`ResponsiveContainer`, `BarChart`, `LineChart`, `AreaChart`, `PieChart`, etc.), and common Tailwind utility classes — zero external CDNs needed since previews run strictly sandboxed.',
     "Reply in the user's language.",
+    '',
+    '## Task Plan & Live Progress',
+    '- For substantive or multi-step tasks (3+ distinct steps), call `update_plan` early with an ordered checklist of concise imperative `steps` (`pending` / `in_progress` / `done` / `skipped` / `failed`), marking the active step `in_progress` and optionally setting a brief `focus` label.',
+    '- Call `update_plan` with the updated full list whenever you finish a step and move to the next, and once more before giving your final reply so every step reflects its final status (`done`, `skipped`, or `failed`).',
+    '- Skip `update_plan` for simple questions, casual conversation, or trivial 1-2 step requests.',
   )
 
-  if (mode === 'plan') {
+  if (opts?.orchestrator) {
+    lines.push('', orchestratorDirective({ ...opts.orchestrator, ultracode: opts.ultracode }))
+  } else if (mode === 'plan') {
     lines.push(
       '',
       '<plan_mode>',
@@ -119,7 +138,7 @@ export function ultracodeDirective(mode: AgentMode): string {
   } else {
     lines.push(
       '3. Build: give each independent change to a role="worker" subagent with a precise scope (files it owns, files it must not touch, the check to run). Do small glue edits yourself.',
-      '4. Verify: after the changes, send a fresh role="explorer" subagent to review the diff against the request and run the relevant checks. Fix what it finds.',
+      '4. Verify: after the changes, send a fresh read-only role="explorer" subagent to review the changed files and diff against the request, and run the relevant build/typecheck/test commands yourself (or via a role="worker" subagent, since explorers have no shell tools). Fix anything found.',
     )
   }
   lines.push(

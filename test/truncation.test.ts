@@ -275,3 +275,137 @@ test('describeNetworkError explains body timeout and mid-stream socket drops cle
   const droppedMsg = describeNetworkError(new Error('terminated'), 'https://api.example.com/v1')
   assert.match(droppedMsg, /dropped mid-response/)
 })
+
+test('openAiAdapter handles non-streaming JSON fallback and array delta.content chunks', { timeout: 20_000 }, async (t) => {
+  let reqNum = 0
+  const { server, port } = await startServer((_req, res) => {
+    reqNum++
+    if (reqNum === 1) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'tool_calls',
+              message: {
+                role: 'assistant',
+                reasoning_content: 'Plan step',
+                content: [{ type: 'text', text: 'Calling tool' }],
+                tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 12, completion_tokens: 8 },
+        }),
+      )
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            index: 0,
+            delta: { content: [{ type: 'text', text: 'Part A ' }, { type: 'text', text: 'Part B' }] },
+            finish_reason: 'stop',
+          },
+        ],
+      })}\n\n`,
+    )
+    res.end('data: [DONE]\n\n')
+  })
+  t.after(() => server.close())
+
+  let streamedText = ''
+  let streamedReasoning = ''
+  const jsonRes = await openAiAdapter.chat(
+    { baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'k' },
+    { model: 'm', system: '', messages: [{ role: 'user', text: 'hi' }], tools: [], signal: new AbortController().signal },
+    {
+      onText: (d) => {
+        streamedText += d
+      },
+      onReasoning: (d) => {
+        streamedReasoning += d
+      },
+    },
+  )
+  assert.equal(jsonRes.incompleteStream, undefined)
+  assert.equal(jsonRes.text, 'Calling tool')
+  assert.equal(jsonRes.reasoning, 'Plan step')
+  assert.equal(streamedText, 'Calling tool')
+  assert.equal(streamedReasoning, 'Plan step')
+  assert.equal(jsonRes.toolCalls.length, 1)
+  assert.deepEqual(jsonRes.toolCalls[0]?.input, { path: 'a.txt' })
+  assert.deepEqual(jsonRes.usage, { inputTokens: 12, outputTokens: 8 })
+
+  let arrayText = ''
+  const sseRes = await openAiAdapter.chat(
+    { baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'k' },
+    { model: 'm', system: '', messages: [{ role: 'user', text: 'hi2' }], tools: [], signal: new AbortController().signal },
+    {
+      onText: (d) => {
+        arrayText += d
+      },
+    },
+  )
+  assert.equal(sseRes.text, 'Part A Part B')
+  assert.equal(arrayText, 'Part A Part B')
+})
+
+test('responsesAdapter separates reasoning summary parts and recovers terminal response text', { timeout: 20_000 }, async (t) => {
+  let reqNum = 0
+  const { server, port } = await startServer((_req, res) => {
+    reqNum++
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (reqNum === 1) {
+      res.write(`event: response.reasoning_summary_part.added\ndata: ${JSON.stringify({ type: 'response.reasoning_summary_part.added', item_id: 'rs_1' })}\n\n`)
+      res.write(`event: response.reasoning_summary_text.delta\ndata: ${JSON.stringify({ type: 'response.reasoning_summary_text.delta', item_id: 'rs_1', delta: 'First thought' })}\n\n`)
+      res.write(`event: response.reasoning_summary_part.added\ndata: ${JSON.stringify({ type: 'response.reasoning_summary_part.added', item_id: 'rs_1' })}\n\n`)
+      res.write(`event: response.reasoning_summary_text.delta\ndata: ${JSON.stringify({ type: 'response.reasoning_summary_text.delta', item_id: 'rs_1', delta: 'Second thought' })}\n\n`)
+      res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'Answer' })}\n\n`)
+      res.write(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed' } })}\n\n`)
+      res.end()
+      return
+    }
+    res.write(
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'Recovered final text' }] }],
+        },
+      })}\n\n`,
+    )
+    res.end()
+  })
+  t.after(() => server.close())
+
+  let r1 = ''
+  const res1 = await responsesAdapter.chat(
+    { baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'k' },
+    { model: 'gpt-5-codex', system: '', messages: [{ role: 'user', text: 'hi' }], tools: [], signal: new AbortController().signal },
+    {
+      onText: () => undefined,
+      onReasoning: (d) => {
+        r1 += d
+      },
+    },
+  )
+  assert.equal(res1.reasoning, 'First thought\n\nSecond thought')
+  assert.equal(r1, 'First thought\n\nSecond thought')
+
+  let t2 = ''
+  const res2 = await responsesAdapter.chat(
+    { baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'k' },
+    { model: 'gpt-5-codex', system: '', messages: [{ role: 'user', text: 'hi2' }], tools: [], signal: new AbortController().signal },
+    {
+      onText: (d) => {
+        t2 += d
+      },
+    },
+  )
+  assert.equal(res2.text, 'Recovered final text')
+  assert.equal(t2, 'Recovered final text')
+})

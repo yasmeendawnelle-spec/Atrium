@@ -175,6 +175,7 @@ test('ultracode: prompt directive, subagent round ceiling, and plan-mode safety'
   const on = systemPrompt('/ws', undefined, { mode: 'auto', ultracode: true })
   assert.match(on, /<ultracode>/)
   assert.match(on, /role="worker"/)
+  assert.match(on, /explorers have no shell tools/)
   const plan = systemPrompt('/ws', undefined, { mode: 'plan', ultracode: true })
   assert.match(plan, /explorers only/)
   assert.doesNotMatch(plan, /role="worker" subagent with a precise scope/)

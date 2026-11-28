@@ -307,6 +307,23 @@ export const responsesAdapter: ProviderAdapter = {
           }
           break
         }
+        case 'response.output_text.done': {
+          if (!text && typeof data.text === 'string' && data.text) {
+            text = data.text
+            handlers.onText(data.text)
+          }
+          break
+        }
+        case 'response.reasoning_summary_part.added': {
+          const key = keyFor(data)
+          const item = reasoningByKey.get(key) ?? upsertReasoning(key, String(data.item_id ?? key))
+          if (item.summary && !item.summary.endsWith('\n')) item.summary += '\n\n'
+          if (reasoning && !reasoning.endsWith('\n')) {
+            reasoning += '\n\n'
+            handlers.onReasoning?.('\n\n')
+          }
+          break
+        }
         case 'response.reasoning_summary_text.delta':
         case 'response.reasoning_text.delta': {
           if (typeof data.delta === 'string' && data.delta) {
@@ -349,10 +366,9 @@ export const responsesAdapter: ProviderAdapter = {
             const sum = summaryTextFromItem(item)
             if (sum && !rec.summary) {
               rec.summary = sum
-              if (!reasoning) {
-                reasoning = sum
-                handlers.onReasoning?.(sum)
-              }
+              const delta = reasoning && !reasoning.endsWith('\n') ? `\n\n${sum}` : sum
+              reasoning += delta
+              handlers.onReasoning?.(delta)
             }
             if (typeof item.encrypted_content === 'string' && item.encrypted_content) {
               rec.encryptedContent = item.encrypted_content
@@ -394,6 +410,15 @@ export const responsesAdapter: ProviderAdapter = {
                 }
                 const sum = summaryTextFromItem(item)
                 if (sum && !rec.summary) rec.summary = sum
+              } else if (item?.type === 'message' && Array.isArray(item.content)) {
+                for (const part of item.content) {
+                  if (part?.type === 'refusal' && typeof part.refusal === 'string' && !refusal) {
+                    refusal = part.refusal
+                  } else if (part?.type === 'output_text' && typeof part.text === 'string' && !text) {
+                    text = part.text
+                    handlers.onText(part.text)
+                  }
+                }
               }
             }
           }

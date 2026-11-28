@@ -5,19 +5,20 @@ export interface SseEvent {
   data: string
 }
 
-const BOUNDARY_RE = /\r?\n\r?\n/
+const BOUNDARY_RE = /\r?\n\r?\n/g
 
 function drainBlocks(buffer: string): { events: SseEvent[]; rest: string } {
   const events: SseEvent[] = []
-  let rest = buffer
+  BOUNDARY_RE.lastIndex = 0
+  let pos = 0
   let match: RegExpExecArray | null
-  while ((match = BOUNDARY_RE.exec(rest)) !== null) {
-    const block = rest.slice(0, match.index)
-    rest = rest.slice(match.index + match[0].length)
+  while ((match = BOUNDARY_RE.exec(buffer)) !== null) {
+    const block = buffer.slice(pos, match.index)
+    pos = match.index + match[0].length
     const evt = parseBlock(block)
     if (evt) events.push(evt)
   }
-  return { events, rest }
+  return { events, rest: pos === 0 ? buffer : buffer.slice(pos) }
 }
 
 /** Yields one event per blank-line-terminated block. Handles LF, CRLF, mixed delimiters, and split chunks. */

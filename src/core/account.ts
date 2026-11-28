@@ -296,6 +296,10 @@ export class RelayPulseAccountManager {
     return this.getState()
   }
 
+  async getSessionToken(): Promise<string | null> {
+    return getSecret(secretKey('account', ACCOUNT_ID, SESSION_SECRET_NAME))
+  }
+
   getState(): RelayPulseAccountState {
     const { remoteAvatar: _remoteAvatar, ...publicState } = this.state
     const subscriptions = normalizeCategorySubscriptionsMap(publicState.subscriptions)

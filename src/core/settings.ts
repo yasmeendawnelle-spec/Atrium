@@ -8,6 +8,7 @@ import {
   type ProviderConfig,
   type ProviderDraft,
 } from '../shared/types.ts'
+import { normalizeOrchestratorMaxHandoffs, ORCHESTRATOR_DEFAULT_MAX_HANDOFFS } from '../shared/orchestrator.ts'
 import { configureNetwork } from './net.ts'
 import { getSecret, secretKey, setSecret } from './secrets.ts'
 import { newId, readJson, removeFile, writeJson } from './store.ts'
@@ -48,6 +49,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   contextWindowTokens: 0,
   reasoningEffort: 'auto',
   ultracode: false,
+  orchestratorEnabled: false,
+  orchestratorMaxHandoffs: ORCHESTRATOR_DEFAULT_MAX_HANDOFFS,
+  orchestratorSubagentsUseExecutor: true,
 }
 
 interface ProviderRecord extends Omit<ProviderConfig, 'hasKey'> {
@@ -108,6 +112,17 @@ export class SettingsStore {
       maxAgentRounds: rawRounds,
       reasoningEffort: normalizeReasoningEffort(saved.reasoningEffort),
       ultracode: saved.ultracode === true,
+      orchestratorEnabled: saved.orchestratorEnabled === true,
+      orchestratorExecutorProviderId:
+        typeof saved.orchestratorExecutorProviderId === 'string' && saved.orchestratorExecutorProviderId.trim()
+          ? saved.orchestratorExecutorProviderId.trim()
+          : undefined,
+      orchestratorExecutorModel:
+        typeof saved.orchestratorExecutorModel === 'string' && saved.orchestratorExecutorModel.trim()
+          ? saved.orchestratorExecutorModel.trim()
+          : undefined,
+      orchestratorMaxHandoffs: normalizeOrchestratorMaxHandoffs(saved.orchestratorMaxHandoffs),
+      orchestratorSubagentsUseExecutor: saved.orchestratorSubagentsUseExecutor !== false,
       ...(saved.browserMode === 'edge' || saved.browserMode === 'google' ? { browserMode: saved.browserMode } : { browserMode: undefined }),
     }
     const desktopControl =
@@ -205,6 +220,21 @@ export class SettingsStore {
     }
     if (patch.ultracode !== undefined) {
       next.ultracode = patch.ultracode === true
+    }
+    if (patch.orchestratorEnabled !== undefined) {
+      next.orchestratorEnabled = patch.orchestratorEnabled === true
+    }
+    if (patch.orchestratorExecutorProviderId !== undefined) {
+      next.orchestratorExecutorProviderId = patch.orchestratorExecutorProviderId.trim() || undefined
+    }
+    if (patch.orchestratorExecutorModel !== undefined) {
+      next.orchestratorExecutorModel = patch.orchestratorExecutorModel.trim() || undefined
+    }
+    if (patch.orchestratorMaxHandoffs !== undefined) {
+      next.orchestratorMaxHandoffs = normalizeOrchestratorMaxHandoffs(patch.orchestratorMaxHandoffs)
+    }
+    if (patch.orchestratorSubagentsUseExecutor !== undefined) {
+      next.orchestratorSubagentsUseExecutor = Boolean(patch.orchestratorSubagentsUseExecutor)
     }
     if (patch.transcriptWidth !== undefined) {
       next.transcriptWidth =
@@ -420,8 +450,16 @@ export class SettingsStore {
     await setSecret(secretKey('provider', id, 'apiKey'), null)
     this.providers = this.providers.filter((p) => p.id !== id)
     await writeJson(this.providersPath(), this.providers)
+    const patch: Partial<AppSettings> = {}
     if (this.settings.activeProviderId === id) {
-      await this.update({ activeProviderId: this.providers[0]?.id })
+      patch.activeProviderId = this.providers[0]?.id
+    }
+    if (this.settings.orchestratorExecutorProviderId === id) {
+      patch.orchestratorExecutorProviderId = undefined
+      patch.orchestratorExecutorModel = undefined
+    }
+    if (Object.keys(patch).length > 0) {
+      await this.update(patch)
     }
   }
 

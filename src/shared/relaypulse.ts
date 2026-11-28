@@ -11,6 +11,7 @@ const envOrigin = (key: string): string | undefined => {
 export const RELAYPULSE_PROD_ORIGIN = envOrigin('ATRIUM_CLOUD_ORIGIN') ?? 'https://api.rpulse.top'
 export const RELAYPULSE_STAGING_ORIGIN = envOrigin('ATRIUM_STAGING_ORIGIN') ?? 'https://api1991.rpulse.top'
 export const RELAYPULSE_DEFAULT_ORIGIN = RELAYPULSE_PROD_ORIGIN
+export const ATRIUM_MARKET_DEFAULT_ORIGIN = envOrigin('ATRIUM_MARKET_URL') ?? 'https://market.rpulse.top'
 
 export function isStagingOrigin(rawOrigin?: string | null): boolean {
   const clean = (rawOrigin || '').trim()

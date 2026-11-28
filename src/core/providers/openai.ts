@@ -141,6 +141,18 @@ interface PartialCall {
   args: string
 }
 
+function extractDeltaContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  let out = ''
+  for (const part of content) {
+    if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+      out += (part as { text: string }).text
+    }
+  }
+  return out
+}
+
 export const openAiAdapter: ProviderAdapter = {
   async chat(endpoint: ProviderEndpoint, req: ChatRequest, handlers: StreamHandlers): Promise<ChatResult> {
     const url = joinUrl(endpoint.baseUrl, 'chat/completions')
@@ -166,6 +178,53 @@ export const openAiAdapter: ProviderAdapter = {
     }
     if (!res.ok || !res.body) throw await httpError(res, 'The model API')
 
+    // Some OpenAI-compatible gateways ignore `stream: true` and return a complete JSON response.
+    if (res.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+      const data = (await res.json()) as Record<string, any>
+      if (data.error) throw new ProviderError(`The model API reported an error: ${data.error.message ?? JSON.stringify(data.error)}`)
+      const usage = data.usage ? parseUsageChunk(data.usage) : undefined
+      const choice = data.choices?.[0]
+      const msg = choice?.message ?? {}
+      const r = msg.reasoning_content ?? msg.reasoning
+      const reasoning = typeof r === 'string' && r ? r : undefined
+      if (reasoning) handlers.onReasoning?.(reasoning)
+      const text = extractDeltaContent(msg.content)
+      if (text) handlers.onText(text)
+      const toolCalls: ToolCall[] = []
+      const badArguments: Record<string, string> = {}
+      if (Array.isArray(msg.tool_calls)) {
+        for (const [index, tc] of msg.tool_calls.entries()) {
+          const name = String(tc.function?.name ?? '')
+          if (!name) continue
+          const id = String(tc.id || `call_${index}_${Date.now().toString(36)}`)
+          const rawArgs =
+            typeof tc.function?.arguments === 'string'
+              ? tc.function.arguments
+              : tc.function?.arguments && typeof tc.function.arguments === 'object'
+                ? JSON.stringify(tc.function.arguments)
+                : ''
+          let input: Record<string, unknown> = {}
+          if (rawArgs.trim()) {
+            try {
+              const parsed = JSON.parse(rawArgs)
+              input = parsed && typeof parsed === 'object' ? parsed : {}
+            } catch {
+              badArguments[id] = rawArgs
+            }
+          }
+          toolCalls.push({ id, name, input })
+        }
+      }
+      return {
+        text,
+        reasoning,
+        toolCalls,
+        badArguments,
+        stopReason: String(choice?.finish_reason ?? 'stop'),
+        usage,
+      }
+    }
+
     let text = ''
     let reasoning = ''
     let stopReason = 'stop'
@@ -190,9 +249,10 @@ export const openAiAdapter: ProviderAdapter = {
       const choice = data.choices?.[0]
       if (!choice) continue
       const delta = choice.delta ?? {}
-      if (typeof delta.content === 'string' && delta.content) {
-        text += delta.content
-        handlers.onText(delta.content)
+      const contentText = extractDeltaContent(delta.content)
+      if (contentText) {
+        text += contentText
+        handlers.onText(contentText)
       }
       const r = delta.reasoning_content ?? delta.reasoning
       if (typeof r === 'string' && r) {

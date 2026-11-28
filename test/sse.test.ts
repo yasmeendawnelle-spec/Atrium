@@ -60,3 +60,18 @@ test('readSse splits mixed CRLF/LF delimiters and multiple trailing events clean
     ['{"n":1}', '{"n":2}', '{"n":3}', '[DONE]'],
   )
 })
+
+test('readSse drains large single-chunk bursts with 200 mixed LF/CRLF events in exact order', async () => {
+  const expected: string[] = []
+  let burst = ''
+  for (let i = 0; i < 200; i++) {
+    const payload = JSON.stringify({ seq: i, text: `token-${i}` })
+    expected.push(payload)
+    burst += `data: ${payload}${i % 2 === 0 ? '\r\n\r\n' : '\n\n'}`
+  }
+  const events = await collect([burst])
+  assert.deepEqual(
+    events.map((e) => e.data),
+    expected,
+  )
+})

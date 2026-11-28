@@ -11,13 +11,35 @@ import {
   type ApprovalRequest,
   type Conversation,
   type DocumentAttachment,
+  type ExecMode,
   type ImageAttachment,
   type Message,
+  type OrchestratorPhase,
   type ProviderConfig,
   type QueuedMessage,
+  type ReasoningEffort,
   type ToolCall,
   type WorkScene,
 } from '../shared/types.ts'
+import {
+  displayProviderName,
+  executorEffortFor,
+  normalizeOrchestratorMaxHandoffs,
+  resolveOrchestratorExecutor,
+} from '../shared/orchestrator.ts'
+import {
+  EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_TOOL_NAMES,
+  prepareMessagesForModel,
+  REQUEST_PLAN_REVIEW_TOOL,
+} from './orchestrator.ts'
+import {
+  derivePlanFromMessages,
+  formatPlanToolOutput,
+  parsePlanInput,
+  UPDATE_PLAN_TOOL,
+  UPDATE_PLAN_TOOL_NAME,
+} from './tools/plan.ts'
 import { chat } from './providers/index.ts'
 import { endpointFor, type ConnectionTest } from './providers/index.ts'
 import {
@@ -65,6 +87,7 @@ import { PREVIEW_TOOLS, runPreviewTool } from './tools/preview_tools.ts'
 
 const MAX_ROUNDS = 40
 const ULTRACODE_MIN_ROUNDS = 60
+const ORCHESTRATOR_MIN_ROUNDS = 50
 const OUTPUT_LIMIT = 30_000
 const READ_ONLY_FILE_TOOLS = new Set(['list_dir', 'read_file', 'search'])
 const READ_ONLY_WEB_TOOLS = new Set(['web_search', 'web_fetch'])
@@ -234,10 +257,22 @@ export interface LoopDeps {
       browserComputerUse?: boolean
       desktopControl?: boolean
       ultracode?: boolean
+      orchestrator?: {
+        phase: OrchestratorPhase
+        plannerModel: string
+        executorModel: string
+        handoffCount: number
+        maxHandoffs: number
+        execMode: ExecMode
+      }
     },
   ) => string
   allowSubagents?: boolean
   forcedMode?: AgentMode
+  forcedProviderId?: string
+  forcedModel?: string
+  forcedEffort?: ReasoningEffort
+  onBeforeModelCall?: (provider: ProviderConfig, model: string) => Promise<void>
   checkpointConversationId?: string
   checkpointTurnIndex?: number
   maxRounds?: number
@@ -443,6 +478,9 @@ export class AgentLoop {
     }
     if (lastUserIdx < 0) throw new Error('Nothing to regenerate yet.')
     conversation.messages = conversation.messages.slice(0, lastUserIdx + 1)
+    const derivedPlan = derivePlanFromMessages(conversation.messages)
+    if (derivedPlan) conversation.plan = derivedPlan
+    else delete conversation.plan
     await this.deps.save(conversation)
     this.deps.emit({ type: 'conversation_sync', conversation })
     await this.executeTurnLoop(conversation, { kind: 'regenerate' })
@@ -554,9 +592,12 @@ export class AgentLoop {
     action: { kind: 'send'; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] } | { kind: 'regenerate' },
     signal: AbortSignal,
   ): Promise<'done' | 'aborted' | 'max_rounds' | 'truncated'> {
-    const provider = this.deps.settings.activeProvider()
+    const provider =
+      (this.deps.forcedProviderId ? this.deps.settings.getProvider(this.deps.forcedProviderId) : undefined) ??
+      this.deps.settings.activeProvider()
     if (!provider) throw new Error('Add a model provider first, under Connections.')
     if (!provider.hasKey) throw new Error(`"${provider.name}" has no API key yet.`)
+    const plannerModel = this.deps.forcedModel ?? provider.model
     const apiKey = await this.deps.settings.providerKey(provider.id)
     const endpoint = endpointFor(provider, apiKey)
     const appSettings = this.deps.settings.get()
@@ -580,24 +621,65 @@ export class AgentLoop {
     const knowledgePrompt = this.deps.knowledge
       ? await this.deps.knowledge.formatPromptHint(workspace)
       : undefined
-    const cuEnabled = appSettings.computerUseEnabled !== false && mode !== 'plan'
-    const browserComputerUse = Boolean(this.deps.browser && cuEnabled)
-    const desktopControl = Boolean(this.deps.computer && cuEnabled && this.isDesktopControlAllowed())
-    const computerUse = browserComputerUse || desktopControl
-    // Subagents run with allowSubagents=false, so Ultracode only ever drives the top-level agent.
+    // Subagents run with allowSubagents=false, so Ultracode & Orchestrator only drive the top-level agent.
     const ultracode = this.isUltracodeActive()
-    const system = this.deps.systemPrompt(workspace, projectNotes || undefined, {
-      mode,
-      workScene,
-      ultracode,
-      skillsSummary: skillsSummary || undefined,
-      pluginRules: pluginRules || undefined,
-      memoryPrompt,
-      knowledgePrompt,
-      computerUse,
-      browserComputerUse,
-      desktopControl,
-    })
+    const orchestratorActive =
+      appSettings.orchestratorEnabled === true &&
+      mode !== 'plan' &&
+      this.deps.allowSubagents !== false &&
+      !this.deps.forcedModel
+
+    const plannerTarget = { provider, model: plannerModel, endpoint }
+    let executorTarget = plannerTarget
+    const maxHandoffs = normalizeOrchestratorMaxHandoffs(appSettings.orchestratorMaxHandoffs)
+    const execMode: ExecMode = mode === 'plan' ? 'auto' : mode
+
+    if (orchestratorActive) {
+      const execChoice = resolveOrchestratorExecutor(this.deps.settings.listProviders(), provider, appSettings)
+      const execEndpoint =
+        execChoice.provider.id === provider.id
+          ? endpoint
+          : endpointFor(execChoice.provider, await this.deps.settings.providerKey(execChoice.provider.id))
+      executorTarget = {
+        provider: execChoice.provider,
+        model: execChoice.model,
+        endpoint: execEndpoint,
+      }
+    }
+
+    let phase: OrchestratorPhase = 'plan'
+    let handoffCount = 0
+
+    const buildSystem = (targetMode: AgentMode, orchPhase?: OrchestratorPhase): string => {
+      const cuEnabled = appSettings.computerUseEnabled !== false && targetMode !== 'plan'
+      const browserComputerUse = Boolean(this.deps.browser && cuEnabled)
+      const desktopControl = Boolean(this.deps.computer && cuEnabled && this.isDesktopControlAllowed())
+      const computerUse = browserComputerUse || desktopControl
+      return this.deps.systemPrompt(workspace, projectNotes || undefined, {
+        mode: targetMode,
+        workScene,
+        ultracode,
+        skillsSummary: skillsSummary || undefined,
+        pluginRules: pluginRules || undefined,
+        memoryPrompt,
+        knowledgePrompt,
+        computerUse,
+        browserComputerUse,
+        desktopControl,
+        ...(orchPhase
+          ? {
+              orchestrator: {
+                phase: orchPhase,
+                plannerModel: plannerTarget.model,
+                executorModel: executorTarget.model,
+                handoffCount,
+                maxHandoffs,
+                execMode,
+              },
+            }
+          : {}),
+      })
+    }
 
     if (action.kind === 'send') {
       const userMessage: Message = {
@@ -611,6 +693,19 @@ export class AgentLoop {
       await this.deps.save(conversation)
     }
 
+    if (orchestratorActive) {
+      this.deps.emit({
+        type: 'orchestrator_phase',
+        conversationId: conversation.id,
+        phase: 'plan',
+        model: plannerTarget.model,
+        providerName: displayProviderName(plannerTarget.provider),
+        plannerModel: plannerTarget.model,
+        executorModel: executorTarget.model,
+        handoffCount: 0,
+      })
+    }
+
     let turnIndex = this.deps.checkpointTurnIndex ?? 0
     if (this.deps.checkpointTurnIndex === undefined) {
       for (let i = conversation.messages.length - 1; i >= 0; i--) {
@@ -622,25 +717,53 @@ export class AgentLoop {
       }
     }
 
-    const tools = this.toolDefs(workspace, mode)
+    const staticSystem = orchestratorActive ? '' : buildSystem(mode)
+    const staticTools = orchestratorActive ? [] : this.toolDefs(workspace, mode)
     const configuredRounds =
       typeof appSettings.maxAgentRounds === 'number' && Number.isFinite(appSettings.maxAgentRounds)
         ? Math.max(10, Math.min(100, Math.floor(appSettings.maxAgentRounds)))
         : MAX_ROUNDS
-    // An Ultracode turn spends rounds on planning, dispatching and verifying, so it gets a higher floor.
-    const maxRounds =
-      this.deps.maxRounds ?? (ultracode ? Math.max(configuredRounds, ULTRACODE_MIN_ROUNDS) : configuredRounds)
+    // An Ultracode or Orchestrator turn spends extra rounds across phases, so give it a higher floor.
+    const floor = ultracode ? ULTRACODE_MIN_ROUNDS : orchestratorActive ? ORCHESTRATOR_MIN_ROUNDS : 0
+    const maxRounds = this.deps.maxRounds ?? Math.max(configuredRounds, floor)
     let stopHookContinuations = 0
+    let lastPreparedModelKey = ''
+
     for (let round = 0; round < maxRounds; round++) {
       if (signal.aborted) {
         await this.deps.save(conversation)
         this.deps.emit({ type: 'turn_end', conversationId: conversation.id, reason: 'aborted' })
         return 'aborted'
       }
+
+      const isPlanningPhase = orchestratorActive && (phase === 'plan' || phase === 'review')
+      const roundTarget = orchestratorActive ? (isPlanningPhase ? plannerTarget : executorTarget) : plannerTarget
+      const roundMode: AgentMode = orchestratorActive ? (isPlanningPhase ? 'plan' : execMode) : mode
+      const roundEffort: ReasoningEffort =
+        this.deps.forcedEffort ??
+        (orchestratorActive && phase === 'execute'
+          ? executorEffortFor(appSettings.reasoningEffort)
+          : (appSettings.reasoningEffort ?? 'auto'))
+      const roundOrchPhase = orchestratorActive ? phase : undefined
+      const roundSystem = orchestratorActive ? buildSystem(roundMode, roundOrchPhase) : staticSystem
+      const roundTools = orchestratorActive ? this.toolDefs(workspace, roundMode, roundOrchPhase) : staticTools
+
+      const modelKey = `${roundTarget.provider.id}::${roundTarget.model}`
+      if (this.deps.onBeforeModelCall && modelKey !== lastPreparedModelKey) {
+        await this.deps.onBeforeModelCall(roundTarget.provider, roundTarget.model)
+        lastPreparedModelKey = modelKey
+      }
+
       let autoCompacted = false
-      if (this.shouldAutoCompact(conversation, system, tools, provider.model)) {
+      if (this.shouldAutoCompact(conversation, roundSystem, roundTools, roundTarget.model)) {
         try {
-          await this.performCompact(conversation, provider, endpoint, signal, true)
+          await this.performCompact(
+            conversation,
+            { ...roundTarget.provider, model: roundTarget.model },
+            roundTarget.endpoint,
+            signal,
+            true,
+          )
           autoCompacted = true
         } catch {
           if (signal.aborted) throw new Error('Stopped.')
@@ -652,17 +775,18 @@ export class AgentLoop {
       const callModel = () => {
         partialText = ''
         partialReasoning = ''
+        const wireMessages = prepareMessagesForModel(conversation.messages, roundTarget.provider.id, roundTarget.model)
         return chat(
-          provider.protocol,
-          endpoint,
+          roundTarget.provider.protocol,
+          roundTarget.endpoint,
           {
-            model: provider.model,
-            system,
-            messages: conversation.messages,
-            tools,
+            model: roundTarget.model,
+            system: roundSystem,
+            messages: wireMessages,
+            tools: roundTools,
             signal,
-            effort: appSettings.reasoningEffort ?? 'auto',
-            cacheKey: conversation.id,
+            effort: roundEffort,
+            cacheKey: orchestratorActive ? `${conversation.id}:${roundTarget.provider.id}:${roundTarget.model}` : conversation.id,
           },
           {
             onText: (delta) => {
@@ -682,7 +806,13 @@ export class AgentLoop {
         result = await callModel()
       } catch (err) {
         if (!autoCompacted && this.deps.settings.get().autoCompact !== false && isContextOverflowError(err) && conversation.messages.length >= 4) {
-          await this.performCompact(conversation, provider, endpoint, signal, true)
+          await this.performCompact(
+            conversation,
+            { ...roundTarget.provider, model: roundTarget.model },
+            roundTarget.endpoint,
+            signal,
+            true,
+          )
           result = await callModel()
         } else {
           if (partialText.trim() || partialReasoning.trim()) {
@@ -692,7 +822,10 @@ export class AgentLoop {
               toolCalls: [],
               ...(partialReasoning ? { reasoning: partialReasoning } : {}),
               workScene,
-              ...(mode === 'plan' ? { mode: 'plan' as const } : {}),
+              model: roundTarget.model,
+              providerId: roundTarget.provider.id,
+              ...(roundOrchPhase ? { orchestratorPhase: roundOrchPhase } : {}),
+              ...(!orchestratorActive && roundMode === 'plan' ? { mode: 'plan' as const } : {}),
               incomplete: signal.aborted ? 'aborted' : 'error',
             }
             conversation.messages.push(partialMsg)
@@ -701,12 +834,18 @@ export class AgentLoop {
           throw err
         }
       }
+      const msgMeta = {
+        model: roundTarget.model,
+        providerId: roundTarget.provider.id,
+        ...(roundOrchPhase ? { orchestratorPhase: roundOrchPhase } : {}),
+      }
+      const msgMode: AgentMode = orchestratorActive ? execMode : roundMode
       const trunc = truncationReason(result)
       if (trunc === 'stream_interrupted') {
         if (!result.text.trim() && !result.reasoning?.trim()) {
           throw new Error('The model response stream closed unexpectedly before sending a reply.')
         }
-        const partial = this.toAssistantMessage({ ...result, toolCalls: [] }, mode, workScene, 'stream_interrupted')
+        const partial = this.toAssistantMessage({ ...result, toolCalls: [] }, msgMode, workScene, 'stream_interrupted', msgMeta)
         conversation.messages.push(partial)
         this.deps.emit({ type: 'message_saved', conversationId: conversation.id, message: partial })
         await this.deps.save(conversation)
@@ -720,7 +859,7 @@ export class AgentLoop {
       }
 
       const terminalNoTools = !result.refusal && result.toolCalls.length === 0 && Object.keys(result.badArguments).length === 0
-      const assistant = this.toAssistantMessage(result, mode, workScene, terminalNoTools && trunc ? trunc : undefined)
+      const assistant = this.toAssistantMessage(result, msgMode, workScene, terminalNoTools && trunc ? trunc : undefined, msgMeta)
       conversation.messages.push(assistant)
       this.deps.emit({ type: 'message_saved', conversationId: conversation.id, message: assistant })
 
@@ -766,11 +905,37 @@ export class AgentLoop {
           return 'truncated'
         }
         this.deps.emit({ type: 'turn_end', conversationId: conversation.id, reason: 'done' })
-        this.maybeRefineTitle(conversation, provider, endpoint, result.text)
+        const titleTarget = orchestratorActive ? executorTarget : plannerTarget
+        this.maybeRefineTitle(conversation, titleTarget.provider, titleTarget.endpoint, result.text, titleTarget.model)
         this.maybeAutoExtractMemory(conversation)
         return 'done'
       }
-      await this.runTools(conversation, result, workspace, signal, mode, turnIndex)
+
+      const orchCtx = orchestratorActive
+        ? {
+            phase,
+            plannerModel: plannerTarget.model,
+            executorModel: executorTarget.model,
+            handoffCount,
+            maxHandoffs,
+          }
+        : undefined
+      const nextPhase = await this.runTools(conversation, result, workspace, signal, roundMode, turnIndex, orchCtx)
+      if (nextPhase && orchestratorActive) {
+        if (nextPhase === 'review') handoffCount += 1
+        phase = nextPhase
+        const activeTarget = phase === 'execute' ? executorTarget : plannerTarget
+        this.deps.emit({
+          type: 'orchestrator_phase',
+          conversationId: conversation.id,
+          phase,
+          model: activeTarget.model,
+          providerName: displayProviderName(activeTarget.provider),
+          plannerModel: plannerTarget.model,
+          executorModel: executorTarget.model,
+          handoffCount,
+        })
+      }
       await this.deps.save(conversation)
     }
     await this.deps.save(conversation)
@@ -809,6 +974,7 @@ export class AgentLoop {
     provider: ProviderConfig,
     endpoint: ProviderEndpoint,
     assistantText: string,
+    modelOverride?: string,
   ): void {
     if (!this.deps.enableAutoTitle || !this.deps.onAutoTitle || this.deps.unattended) return
     if (conversation.titleSource === 'user' || conversation.titleSource === 'ai') return
@@ -834,7 +1000,7 @@ export class AgentLoop {
           provider.protocol,
           endpoint,
           {
-            model: provider.model,
+            model: modelOverride ?? provider.model,
             system:
               'Generate ONE concise sidebar title summarizing this conversation in the exact same language the user wrote (4-14 Chinese characters or 2-6 English words). Output ONLY plain text with no quotes, no markdown, no prefixes, and no trailing punctuation.',
             messages: [{ role: 'user', text: summaryInput }],
@@ -868,6 +1034,7 @@ export class AgentLoop {
     mode: AgentMode,
     workScene: WorkScene,
     incomplete?: 'token_limit' | 'stream_interrupted',
+    meta?: { model?: string; providerId?: string; orchestratorPhase?: OrchestratorPhase },
   ): Message {
     return {
       role: 'assistant',
@@ -878,6 +1045,9 @@ export class AgentLoop {
       reasoningItems: result.reasoningItems,
       usage: result.usage,
       workScene,
+      ...(meta?.model ? { model: meta.model } : {}),
+      ...(meta?.providerId ? { providerId: meta.providerId } : {}),
+      ...(meta?.orchestratorPhase ? { orchestratorPhase: meta.orchestratorPhase } : {}),
       ...(mode === 'plan' ? { mode: 'plan' as const } : {}),
       ...(incomplete ? { incomplete } : {}),
     }
@@ -888,8 +1058,9 @@ export class AgentLoop {
     return s.desktopControlEnabled === true || s.computerUseMode === 'desktop' || !this.deps.browser
   }
 
-  private toolDefs(workspace: string | undefined, mode: AgentMode): ToolDef[] {
+  private toolDefs(workspace: string | undefined, mode: AgentMode, orchestratorPhase?: OrchestratorPhase): ToolDef[] {
     const defs: ToolDef[] = []
+    if (this.deps.allowSubagents !== false) defs.push(UPDATE_PLAN_TOOL)
     if (workspace) {
       if (mode === 'plan') {
         defs.push(...FILE_TOOLS.filter((t) => READ_ONLY_FILE_TOOLS.has(t.name)))
@@ -926,6 +1097,11 @@ export class AgentLoop {
     }
     if (this.deps.settings.get().webEnabled !== false) defs.push(...WEB_TOOLS)
     if (this.deps.allowSubagents !== false) defs.push(RUN_SUBAGENT_TOOL)
+    if (orchestratorPhase === 'plan' || orchestratorPhase === 'review') {
+      defs.push(EXIT_PLAN_MODE_TOOL)
+    } else if (orchestratorPhase === 'execute') {
+      defs.push(REQUEST_PLAN_REVIEW_TOOL)
+    }
     if ((this.deps.mcp.resources?.().length ?? 0) > 0) {
       defs.push(MCP_LIST_RESOURCES_TOOL, MCP_READ_RESOURCE_TOOL)
     }
@@ -937,7 +1113,11 @@ export class AgentLoop {
     return defs
   }
 
-  private isAllowedInPlanMode(name: string): boolean {
+  private isAllowedInPlanMode(name: string, orchestratorPhase?: OrchestratorPhase): boolean {
+    if (name === UPDATE_PLAN_TOOL_NAME) return true
+    if (name === 'exit_plan_mode' && (orchestratorPhase === 'plan' || orchestratorPhase === 'review')) {
+      return true
+    }
     return (
       READ_ONLY_FILE_TOOLS.has(name) ||
       READ_ONLY_WEB_TOOLS.has(name) ||
@@ -955,6 +1135,8 @@ export class AgentLoop {
   }
 
   private isConcurrentReadOnly(call: ToolCall, mode: AgentMode): boolean {
+    if (call.name === UPDATE_PLAN_TOOL_NAME) return false
+    if (ORCHESTRATOR_TOOL_NAMES.has(call.name)) return false
     if (this.deps.mcp.findTool(call.name)) return false
     if (
       call.name === 'load_skill' ||
@@ -1134,7 +1316,15 @@ export class AgentLoop {
     signal: AbortSignal,
     mode: AgentMode,
     turnIndex: number,
-  ): Promise<void> {
+    orchCtx?: {
+      phase: OrchestratorPhase
+      plannerModel: string
+      executorModel: string
+      handoffCount: number
+      maxHandoffs: number
+      pendingTransition?: { nextPhase: OrchestratorPhase }
+    },
+  ): Promise<OrchestratorPhase | undefined> {
     const hitTokenLimit = truncationReason(result) === 'token_limit'
     const nameById = new Map(result.toolCalls.map((c) => [c.id, c.name]))
     for (const [id, raw] of Object.entries(result.badArguments)) {
@@ -1146,7 +1336,7 @@ export class AgentLoop {
     }
     const calls = result.toolCalls.filter((c) => !(c.id in result.badArguments))
     for (let i = 0; i < calls.length; ) {
-      if (signal.aborted) return
+      if (signal.aborted) return orchCtx?.pendingTransition?.nextPhase
       if (this.isConcurrentReadOnly(calls[i]!, mode)) {
         const batch: ToolCall[] = []
         while (i < calls.length && this.isConcurrentReadOnly(calls[i]!, mode)) {
@@ -1175,10 +1365,11 @@ export class AgentLoop {
       const mcp = this.deps.mcp.findTool(call.name)
       this.deps.emit({ type: 'tool_call', conversationId: conversation.id, call, serverName: mcp?.serverName })
       const outcome = await this.runWithToolHooks(conversation, call, workspace, signal, () =>
-        this.execute(conversation, call, workspace, mcp?.serverId, signal, mode, turnIndex),
+        this.execute(conversation, call, workspace, mcp?.serverId, signal, mode, turnIndex, orchCtx),
       )
       await this.recordTool(conversation, call.id, call.name, outcome.output, outcome.isError, outcome.images)
     }
+    return orchCtx?.pendingTransition?.nextPhase
   }
 
   private async execute(
@@ -1189,13 +1380,73 @@ export class AgentLoop {
     signal: AbortSignal,
     mode: AgentMode,
     turnIndex: number,
+    orchCtx?: {
+      phase: OrchestratorPhase
+      plannerModel: string
+      executorModel: string
+      handoffCount: number
+      maxHandoffs: number
+      pendingTransition?: { nextPhase: OrchestratorPhase }
+    },
   ): Promise<{ output: string; isError: boolean; images?: ImageAttachment[] }> {
     try {
-      if (mode === 'plan' && !this.isAllowedInPlanMode(call.name)) {
+      if (mode === 'plan' && !this.isAllowedInPlanMode(call.name, orchCtx?.phase)) {
         return {
           output: `Tool "${call.name}" is disabled in Plan Mode (read-only). Deliver the plan first and switch permission mode before making changes.`,
           isError: true,
         }
+      }
+      if (call.name === 'exit_plan_mode') {
+        if (!orchCtx || (orchCtx.phase !== 'plan' && orchCtx.phase !== 'review')) {
+          return { output: 'exit_plan_mode is only available during planning or review phases.', isError: true }
+        }
+        const plan = typeof call.input.plan === 'string' ? call.input.plan.trim() : ''
+        if (!plan) {
+          return { output: 'exit_plan_mode requires a non-empty `plan` string.', isError: true }
+        }
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        orchCtx.pendingTransition = { nextPhase: 'execute' }
+        return {
+          output: `Plan handed off to executor (${orchCtx.executorModel}). Proceeding to execution phase.`,
+          isError: false,
+        }
+      }
+      if (call.name === 'request_plan_review') {
+        if (!orchCtx || orchCtx.phase !== 'execute') {
+          return { output: 'request_plan_review is only available during the execution phase.', isError: true }
+        }
+        const reason = typeof call.input.reason === 'string' ? call.input.reason.trim() : ''
+        const report = typeof call.input.report === 'string' ? call.input.report.trim() : ''
+        if (!reason && !report) {
+          return { output: 'request_plan_review requires `reason` and `report`.', isError: true }
+        }
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        if (orchCtx.handoffCount >= orchCtx.maxHandoffs) {
+          return {
+            output: `Maximum orchestrator plan-review handoffs (${orchCtx.maxHandoffs}) reached for this turn. Wrap up cleanly and report current progress and any remaining blockers to the user.`,
+            isError: false,
+          }
+        }
+        orchCtx.pendingTransition = { nextPhase: 'review' }
+        return {
+          output: `Handing back to planner (${orchCtx.plannerModel}) for [plan review].`,
+          isError: false,
+        }
+      }
+      if (call.name === UPDATE_PLAN_TOOL_NAME) {
+        this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
+        const parsed = parsePlanInput(call.input ?? {})
+        if (!parsed.ok) {
+          return { output: parsed.error, isError: true }
+        }
+        if (parsed.plan) {
+          conversation.plan = parsed.plan
+        } else {
+          delete conversation.plan
+        }
+        await this.deps.save(conversation)
+        this.deps.emit({ type: 'plan_update', conversationId: conversation.id, plan: parsed.plan })
+        return { output: formatPlanToolOutput(parsed.plan), isError: false }
       }
       if (call.name === 'load_skill' || call.name === 'run_subagent') {
         this.deps.emit({ type: 'tool_status', conversationId: conversation.id, toolCallId: call.id, status: 'running' })
@@ -1445,12 +1696,32 @@ export class AgentLoop {
       updatedAt: Date.now(),
       messages: [],
     }
+    const subAppSettings = this.deps.settings.get()
+    const subBaseProvider =
+      (this.deps.forcedProviderId ? this.deps.settings.getProvider(this.deps.forcedProviderId) : undefined) ??
+      this.deps.settings.activeProvider()
+    const routeSubagentToExecutor =
+      subAppSettings.orchestratorEnabled === true &&
+      subAppSettings.orchestratorSubagentsUseExecutor !== false &&
+      Boolean(subBaseProvider)
+    const subExecChoice =
+      routeSubagentToExecutor && subBaseProvider
+        ? resolveOrchestratorExecutor(this.deps.settings.listProviders(), subBaseProvider, subAppSettings)
+        : null
+
     const childLoop = new AgentLoop({
       ...this.deps,
       allowSubagents: false,
       enableAutoTitle: false,
       onAutoTitle: undefined,
       forcedMode: role === 'explorer' ? 'plan' : parentMode,
+      ...(subExecChoice
+        ? {
+            forcedProviderId: subExecChoice.provider.id,
+            forcedModel: subExecChoice.model,
+            forcedEffort: executorEffortFor(subAppSettings.reasoningEffort),
+          }
+        : {}),
       checkpointConversationId: this.deps.checkpointConversationId ?? parentConversation.id,
       checkpointTurnIndex: turnIndex,
       maxRounds,

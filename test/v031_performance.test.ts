@@ -15,6 +15,8 @@ import { invalidateWorkspaceFilesCache, listWorkspaceFiles, writeApproved } from
 import { getGitChanges, splitUnifiedGitDiff, unquoteGitPath } from '../src/core/tools/git.ts'
 import { applyPreparedPatch, preparePatch } from '../src/core/tools/patch.ts'
 import { splitStreamingMarkdownBlocks } from '../src/renderer/src/lib/markdownBlocks.ts'
+import { createCoreEventCoalescer } from '../src/core/streamCoalescer.ts'
+import type { CoreEvent } from '../src/shared/ipc.ts'
 import type { Conversation, TerminalEvent } from '../src/shared/types.ts'
 
 const execFileAsync = promisify(execFile)
@@ -483,4 +485,97 @@ test('P5: Workspace & Plugin hook caches reuse parsed configs on unchanged mtime
     invalidateWorkspaceHookCache()
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('P6: splitStreamingMarkdownBlocks handles 4-backtick fences and padded closing fences cleanly', () => {
+  const md = [
+    'Intro paragraph',
+    '',
+    '````md',
+    '```ts',
+    'const nested = true',
+    '```',
+    '',
+    '````   ',
+    '',
+    '~~~sh',
+    'echo "open"',
+  ].join('\n')
+
+  const blocks = splitStreamingMarkdownBlocks(md)
+  assert.equal(blocks.length, 3)
+  assert.equal(blocks[0], 'Intro paragraph')
+  assert.equal(blocks[1], '````md\n```ts\nconst nested = true\n```\n\n````   ')
+  assert.equal(blocks[2], '~~~sh\necho "open"')
+})
+
+test('P6: createCoreEventCoalescer batches deltas cleanly and preserves chronological flush boundaries', async () => {
+  const emitted: CoreEvent[] = []
+  const coalescer = createCoreEventCoalescer((evt) => emitted.push(evt), 25)
+
+  coalescer.emit({ channel: 'agent', payload: { type: 'reasoning_delta', conversationId: 'c1', text: 'Think ' } })
+  coalescer.emit({ channel: 'agent', payload: { type: 'reasoning_delta', conversationId: 'c1', text: 'more' } })
+  coalescer.emit({ channel: 'agent', payload: { type: 'text_delta', conversationId: 'c1', text: 'Hel' } })
+  coalescer.emit({ channel: 'agent', payload: { type: 'text_delta', conversationId: 'c1', text: 'lo' } })
+
+  // Transition from reasoning_delta -> text_delta should flush reasoning immediately
+  assert.equal(emitted.length, 1)
+  assert.deepEqual(emitted[0], {
+    channel: 'agent',
+    payload: { type: 'reasoning_delta', conversationId: 'c1', text: 'Think more' },
+  })
+
+  // Non-delta event for c1 must flush pending text_delta BEFORE forwarding itself
+  coalescer.emit({ channel: 'agent', payload: { type: 'turn_end', conversationId: 'c1', reason: 'done' } })
+  assert.equal(emitted.length, 3)
+  assert.deepEqual(emitted[1], {
+    channel: 'agent',
+    payload: { type: 'text_delta', conversationId: 'c1', text: 'Hello' },
+  })
+  assert.deepEqual(emitted[2], {
+    channel: 'agent',
+    payload: { type: 'turn_end', conversationId: 'c1', reason: 'done' },
+  })
+
+  // Platform task_delta coalescing flushes before session_update
+  coalescer.emit({ channel: 'platform', payload: { type: 'task_delta', sessionId: 's1', taskId: 't1', field: 'output', delta: 'A' } })
+  coalescer.emit({ channel: 'platform', payload: { type: 'task_delta', sessionId: 's1', taskId: 't1', field: 'output', delta: 'B' } })
+  assert.equal(emitted.length, 3)
+  coalescer.emit({
+    channel: 'platform',
+    payload: {
+      type: 'session_update',
+      session: {
+        id: 's1',
+        title: 'S1',
+        workspace: '/tmp',
+        commanderId: 'atrium',
+        workerIds: [],
+        useWorktrees: false,
+        maxDepth: 2,
+        status: 'completed',
+        tasks: [],
+        board: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    },
+  })
+  assert.equal(emitted.length, 5)
+  assert.deepEqual(emitted[3], {
+    channel: 'platform',
+    payload: { type: 'task_delta', sessionId: 's1', taskId: 't1', field: 'output', delta: 'AB' },
+  })
+  assert.equal(emitted[4]?.channel, 'platform')
+  assert.equal(emitted[4]?.channel === 'platform' && emitted[4].payload.type, 'session_update')
+
+  // Timer flush works automatically without manual flush
+  coalescer.emit({ channel: 'agent', payload: { type: 'text_delta', conversationId: 'c2', text: 'Async ' } })
+  coalescer.emit({ channel: 'agent', payload: { type: 'text_delta', conversationId: 'c2', text: 'chunk' } })
+  await waitFor(() => emitted.length >= 6)
+  assert.deepEqual(emitted[5], {
+    channel: 'agent',
+    payload: { type: 'text_delta', conversationId: 'c2', text: 'Async chunk' },
+  })
+  coalescer.dispose()
 })

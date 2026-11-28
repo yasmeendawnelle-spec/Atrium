@@ -294,6 +294,8 @@ export interface QueuedMessage {
   createdAt: number
 }
 
+export type OrchestratorPhase = 'plan' | 'execute' | 'review'
+
 export type Message =
   | { role: 'user'; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; isSummary?: boolean }
   | {
@@ -309,6 +311,12 @@ export type Message =
       usage?: TokenUsage
       mode?: AgentMode
       workScene?: WorkScene
+      /** Model id that produced this assistant message (helpful when switching models mid-turn). */
+      model?: string
+      /** Provider id that produced this assistant message. */
+      providerId?: string
+      /** Orchestrator phase active when this message was produced. */
+      orchestratorPhase?: OrchestratorPhase
       /** Present when this reply ended prematurely before completing cleanly. */
       incomplete?: 'token_limit' | 'stream_interrupted' | 'aborted' | 'error'
     }
@@ -342,6 +350,8 @@ export interface ConversationMeta {
   /** Source conversation provenance when created via Fork Branch. */
   forkedFromId?: string
   forkedFromTitle?: string
+  /** Source conversation provenance when imported from another local coding agent. */
+  importedFrom?: ImportedSessionOrigin
   /** Pinned conversations stay at the top of their workspace group. */
   pinned?: boolean
   /** Archived conversations move out of the main sidebar list until restored. */
@@ -350,6 +360,70 @@ export interface ConversationMeta {
   diffStats?: { additions: number; deletions: number }
   /** Aggregated token and message usage cached in chats index for instant UsageSummary queries. */
   usageTotals?: ConversationUsageTotals
+}
+
+export type ExternalAgentSource =
+  | 'claude-code'
+  | 'codex'
+  | 'dsh'
+  | 'antigravity'
+  | 'cursor'
+  | 'gemini-cli'
+  | 'cline'
+  | 'opencode'
+  | 'aider'
+  | 'custom'
+
+export interface ImportedSessionOrigin {
+  source: ExternalAgentSource
+  sourceLabel?: string
+  externalId: string
+  sourcePath: string
+  importedAt: number
+}
+
+export interface ExternalSessionCandidate {
+  /** Stable deduplication key `${source}:${externalId}`. */
+  key: string
+  source: ExternalAgentSource
+  sourceLabel: string
+  externalId: string
+  sourcePath: string
+  title: string
+  preview?: string
+  workspace?: string
+  workspaceExists?: boolean
+  messageCount: number
+  turnCount: number
+  createdAt: number
+  updatedAt: number
+  fileSize?: number
+  alreadyImported: boolean
+  importedChatId?: string
+}
+
+export interface ExternalSessionScanResult {
+  sessions: ExternalSessionCandidate[]
+  sources: Array<{
+    source: ExternalAgentSource
+    label: string
+    count: number
+    roots: string[]
+  }>
+  warnings: string[]
+}
+
+export interface ExternalSessionImportTarget {
+  key: string
+  source: ExternalAgentSource
+  externalId: string
+  sourcePath: string
+}
+
+export interface SessionImportResult {
+  imported: ConversationMeta[]
+  skipped: Array<{ key: string; reason: string }>
+  warnings: string[]
 }
 
 /** True when a persisted chat entry is an empty, unstarted non-worktree/non-fork draft. */
@@ -492,8 +566,23 @@ export interface WorkspaceFilePreview {
   size: number
 }
 
+export type PlanStepStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'failed'
+
+export interface PlanStep {
+  title: string
+  status: PlanStepStatus
+}
+
+export interface ConversationPlan {
+  focus?: string
+  explanation?: string
+  steps: PlanStep[]
+  updatedAt: number
+}
+
 export interface Conversation extends ConversationMeta {
   messages: Message[]
+  plan?: ConversationPlan
 }
 
 // ---- Tool runs and approvals ----
@@ -550,6 +639,17 @@ export type AgentEvent =
   | { type: 'conversation_sync'; conversation: Conversation }
   | { type: 'queue_sync'; conversationId: string; items: QueuedMessage[] }
   | { type: 'compacting'; conversationId: string; active: boolean; auto?: boolean }
+  | {
+      type: 'orchestrator_phase'
+      conversationId: string
+      phase: OrchestratorPhase
+      model: string
+      providerName?: string
+      plannerModel: string
+      executorModel: string
+      handoffCount: number
+    }
+  | { type: 'plan_update'; conversationId: string; plan: ConversationPlan | null }
   | { type: 'error'; conversationId: string; message: string }
   | {
       type: 'turn_end'
@@ -618,6 +718,161 @@ export interface GithubImportResult {
   sources: string[]
   plugin?: GithubPluginProposal
   warning?: string
+}
+
+export type MarketPluginSection = 'official' | 'community'
+export type MarketPluginStatus = 'pending' | 'approved' | 'rejected'
+export type MarketSubmissionKind = 'bundle' | 'github'
+export type MarketExternalSource = 'github' | 'claude' | 'chatgpt' | 'dsh'
+export type MarketSearchScope = 'all' | 'atrium' | MarketExternalSource
+
+export interface MarketAuthorInfo {
+  name: string
+  email?: string
+  avatar?: string | null
+  role: 'co-contributor' | 'community'
+}
+
+export interface MarketBundleFile {
+  path: string
+  content: string
+  encoding: 'utf8' | 'base64'
+  size: number
+}
+
+export interface MarketPluginListing {
+  id: string
+  name: string
+  displayName?: string
+  version: string
+  description: string
+  category?: string
+  tags: string[]
+  section: MarketPluginSection
+  status: MarketPluginStatus
+  submissionKind: MarketSubmissionKind
+  repoUrl?: string
+  homepage?: string
+  author: MarketAuthorInfo
+  skillNames: string[]
+  commandNames: string[]
+  ruleFiles: string[]
+  mcpCount: number
+  hasHooks: boolean
+  hasScripts: boolean
+  hasTheme?: boolean
+  hasBootAnimation?: boolean
+  fileCount: number
+  totalBytes: number
+  installCount: number
+  createdAt: number
+  updatedAt: number
+  reviewedBy?: string
+  reviewedAt?: number
+  reviewNote?: string
+}
+
+export interface MarketPluginDetail {
+  plugin: MarketPluginListing
+  files?: MarketBundleFile[]
+}
+
+export interface MarketIdentity {
+  authenticated: boolean
+  email?: string
+  displayName?: string
+  avatar?: string | null
+  isCoContributor: boolean
+  isReviewer: boolean
+  pendingCount: number
+  offline?: boolean
+}
+
+export interface MarketCatalogResult {
+  official: MarketPluginListing[]
+  community: MarketPluginListing[]
+  offline?: boolean
+  error?: string
+}
+
+export interface MarketReviewQueueResult {
+  pending: MarketPluginListing[]
+  approved: MarketPluginListing[]
+  rejected: MarketPluginListing[]
+}
+
+export interface MarketLocalPackPreview {
+  folderPath: string
+  name: string
+  displayName?: string
+  version: string
+  description: string
+  skillNames: string[]
+  commandNames: string[]
+  ruleFiles: string[]
+  mcpCount: number
+  hasHooks: boolean
+  hasScripts: boolean
+  hasTheme?: boolean
+  hasBootAnimation?: boolean
+  fileCount: number
+  totalBytes: number
+  warnings: string[]
+  files: MarketBundleFile[]
+}
+
+export interface MarketSubmitRequest {
+  name: string
+  displayName?: string
+  version?: string
+  description: string
+  category?: string
+  tags?: string[]
+  submissionKind: MarketSubmissionKind
+  repoUrl?: string
+  files?: MarketBundleFile[]
+  targetSection?: MarketPluginSection
+  skillNames?: string[]
+  commandNames?: string[]
+  ruleFiles?: string[]
+  mcpCount?: number
+  hasHooks?: boolean
+}
+
+export interface MarketReviewDecisionRequest {
+  decision: 'approve' | 'reject'
+  section?: MarketPluginSection
+  note?: string
+}
+
+export interface MarketExternalHit {
+  id: string
+  source: MarketExternalSource
+  originKind: 'local' | 'github' | 'registry'
+  name: string
+  title: string
+  description: string
+  version?: string
+  authorName?: string
+  authorAvatar?: string | null
+  stars?: number
+  repositoryUrl?: string
+  localSourcePath?: string
+  alreadyImported?: boolean
+  skillNames?: string[]
+  commandNames?: string[]
+  ruleFiles?: string[]
+  mcpCount?: number
+  installs?: InstallOption[]
+}
+
+export interface MarketUnifiedSearchResult {
+  query: string
+  scope: MarketSearchScope
+  official: MarketPluginListing[]
+  community: MarketPluginListing[]
+  external: MarketExternalHit[]
+  warnings: string[]
 }
 
 // ---- Settings ----
@@ -694,12 +949,85 @@ export interface SkillDraft {
   scope?: 'workspace' | 'user'
 }
 
-export type PluginOrigin = 'claude-code' | 'codex' | 'antigravity' | 'github' | 'local' | 'workspace' | 'atrium'
+export type PluginOrigin = 'claude-code' | 'codex' | 'antigravity' | 'dsh' | 'github' | 'local' | 'workspace' | 'atrium'
 
 export interface PluginMcpProposal {
   serverKey: string
   option: InstallOption
   unsupportedRuntime?: string
+}
+
+export interface PluginThemeEffects {
+  clickReticle?: boolean
+  telemetryHud?: boolean
+  rollingClock?: boolean
+  tactileAudio?: boolean
+  redactionReveal?: boolean
+  archiveBackdrop?: boolean
+  archiveMode?: boolean
+}
+
+export interface PluginThemeManifest {
+  id: string
+  name?: string
+  cssFile?: string
+  bootFile?: string
+  defaultColorMode?: 'light' | 'dark'
+  chrome?: 'rhine-lab' | 'none'
+  effects?: PluginThemeEffects
+}
+
+export interface PluginBootPalette {
+  bg?: string
+  surface?: string
+  ink?: string
+  muted?: string
+  olive?: string
+  brass?: string
+  accent?: string
+  accent2?: string
+  grid?: string
+}
+
+export interface PluginBootConfig {
+  style: 'rhine-lab-access' | 'rhine-lab-orbital' | 'minimal-telemetry'
+  durationMs: number
+  brand: string
+  subBrand?: string
+  systemTag?: string
+  division?: string
+  coordinates?: string
+  specCode?: string
+  versionTag?: string
+  motto?: string
+  confirmEntry?: boolean
+  entryReadyText?: string
+  entryButtonText?: string
+  entryHintText?: string
+  accessPrompt?: string
+  identityText?: string
+  requestText?: string
+  processingText?: string
+  authorizedText?: string
+  welcomePrefix?: string
+  companyTag?: string
+  databaseTag?: string
+  poweredBy?: string
+  mastheadSub?: string
+  mastheadOs?: string
+  telemetryLines: string[]
+  palette?: PluginBootPalette
+}
+
+export interface ActivePluginThemePayload {
+  pluginId: string
+  pluginName: string
+  themeId: string
+  themeName: string
+  css: string
+  boot?: PluginBootConfig
+  chrome?: 'rhine-lab' | 'none'
+  effects?: PluginThemeEffects
 }
 
 export interface PluginCandidate {
@@ -721,6 +1049,9 @@ export interface PluginCandidate {
   mcpProposals: PluginMcpProposal[]
   hasHooks: boolean
   hasAppConnector: boolean
+  hasTheme?: boolean
+  hasBootAnimation?: boolean
+  themeName?: string
   warnings: string[]
   alreadyImported: boolean
   importedPluginId?: string
@@ -747,6 +1078,9 @@ export interface InstalledPlugin {
   commandNames: string[]
   ruleFiles: string[]
   mcpServerIds: string[]
+  hasTheme?: boolean
+  hasBootAnimation?: boolean
+  themeName?: string
   warnings?: string[]
 }
 
@@ -814,6 +1148,15 @@ export interface AppSettings {
    * (parallel explorers, scoped workers, an independent verifier). Independent of effort.
    */
   ultracode?: boolean
+  /**
+   * Dual-Model Orchestrator: the active strong model acts as Planner & Reviewer
+   * (read-only), delegating concrete execution and subagents to a fast executor model.
+   */
+  orchestratorEnabled?: boolean
+  orchestratorExecutorProviderId?: string
+  orchestratorExecutorModel?: string
+  orchestratorMaxHandoffs?: number
+  orchestratorSubagentsUseExecutor?: boolean
   onboarded: boolean
   proxyMode: ProxyMode
   proxyUrl?: string
