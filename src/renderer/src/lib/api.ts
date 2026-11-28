@@ -29,6 +29,8 @@ export const shell = {
   openBrowserWindow: (url?: string) => window.atrium.shell.openBrowserWindow(url),
   syncBrowserView: (layout: BrowserViewLayout | null) => window.atrium.shell.syncBrowserView(layout),
   dockBrowserView: () => window.atrium.shell.dockBrowserView(),
+  readArchiveModel: (name: 'archive-cassette.glb' | 'archive-assembly.glb') =>
+    window.atrium.shell.readArchiveModel(name),
 }
 
 export function errorMessage(err: unknown): string {

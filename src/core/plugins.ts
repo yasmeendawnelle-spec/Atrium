@@ -6,14 +6,20 @@ import { access, cp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } f
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
+  ActivePluginThemePayload,
   InstalledPlugin,
   InstallOption,
+  MarketBundleFile,
+  MarketLocalPackPreview,
   McpServerConfig,
+  PluginBootConfig,
+  PluginBootPalette,
   PluginCandidate,
   PluginDetail,
   PluginImportResult,
   PluginMcpProposal,
   PluginOrigin,
+  PluginThemeManifest,
 } from '../shared/types.ts'
 import { configsFromMarkdown, parseConfigText } from './mcp/parse.ts'
 import { normalizeHooksConfig, type PluginHookSource } from './hooks.ts'
@@ -25,12 +31,156 @@ import { resolveInsideReal } from './tools/workspace.ts'
 const MAX_PLUGIN_FILE_BYTES = 20 * 1024 * 1024
 const MAX_RULE_FILE_BYTES = 16 * 1024
 const MAX_TOTAL_RULE_CHARS = 32_000
+const MAX_PLUGIN_THEME_CSS_BYTES = 128 * 1024
 const SKIP_COPY_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', '.DS_Store'])
 const SKIP_COPY_FILES = new Set(['.in_use', '.app.json', 'Thumbs.db'])
 const UNSUPPORTED_RUNTIMES = new Set(['agy-node', 'codex.exe', 'codex-command-runner.exe', 'codex-code-mode-host.exe'])
 const PLUGIN_MANIFEST_PATHS = ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', 'plugin.json']
 const MCP_CONFIG_FILES = ['.mcp.json', 'mcp_config.json', 'mcp.json']
 const GITHUB_API = 'https://api.github.com'
+const SAFE_BOOT_COLOR_RE =
+  /^(?:#[0-9a-fA-F]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0?\.\d+|\.\d+|1(?:\.0+)?|0))?\s*\))$/
+
+/** Sanitizes plugin-contributed CSS to prevent remote fetches, @import chains, or legacy script expressions. */
+export function sanitizePluginCss(rawCss: string): string {
+  if (!rawCss || typeof rawCss !== 'string') return ''
+  let css = rawCss.replace(/\0/g, '').slice(0, MAX_PLUGIN_THEME_CSS_BYTES)
+  css = css.replace(/@import\s+(?:url\([^)]*\)|['"][^'"]*['"]|[^;{}\r\n]+)\s*;?/gi, '/* blocked @import */')
+  css = css.replace(/expression\s*\([^)]*\)/gi, 'none')
+  css = css.replace(/(?:-moz-binding|behavior)\s*:[^;{}]+;?/gi, '')
+  css = css.replace(/javascript\s*:/gi, 'blocked:')
+  css = css.replace(/vbscript\s*:/gi, 'blocked:')
+  css = css.replace(/url\(\s*(['"]?)([\s\S]*?)\1\s*\)/gi, (full, _q, inner: string) => {
+    const trimmed = inner.trim()
+    if (/^#[A-Za-z0-9_-]+$/.test(trimmed)) return full
+    if (/^data:image\/svg\+xml/i.test(trimmed) && !/<script/i.test(trimmed)) return full
+    return 'none'
+  })
+  return css.trim()
+}
+
+function cleanBootText(val: unknown, maxLen = 120): string | undefined {
+  if (typeof val !== 'string') return undefined
+  const clean = val.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  return clean ? clean.slice(0, maxLen) : undefined
+}
+
+function cleanBootColor(val: unknown): string | undefined {
+  if (typeof val !== 'string') return undefined
+  const clean = val.trim()
+  return SAFE_BOOT_COLOR_RE.test(clean) ? clean : undefined
+}
+
+/** Validates and normalizes a declarative JSON boot sequence configuration. */
+export function parsePluginBootConfig(rawJson: string): PluginBootConfig | null {
+  if (!rawJson || typeof rawJson !== 'string') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawJson)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const obj = parsed as Record<string, unknown>
+
+  const brand = cleanBootText(obj.brand, 64)
+  if (!brand) return null
+
+  const style: PluginBootConfig['style'] =
+    obj.style === 'rhine-lab-access'
+      ? 'rhine-lab-access'
+      : obj.style === 'minimal-telemetry'
+        ? 'minimal-telemetry'
+        : 'rhine-lab-orbital'
+
+  const rawDuration = typeof obj.durationMs === 'number' && Number.isFinite(obj.durationMs) ? obj.durationMs : 2900
+  const durationMs = Math.max(1200, Math.min(4500, Math.round(rawDuration)))
+
+  const telemetryLines: string[] = Array.isArray(obj.telemetryLines)
+    ? obj.telemetryLines
+        .map((line) => cleanBootText(line, 120))
+        .filter((line): line is string => Boolean(line))
+        .slice(0, 8)
+    : []
+
+  let palette: PluginBootPalette | undefined
+  if (obj.palette && typeof obj.palette === 'object' && !Array.isArray(obj.palette)) {
+    const rawPal = obj.palette as Record<string, unknown>
+    const nextPal: PluginBootPalette = {}
+    const bg = cleanBootColor(rawPal.bg)
+    const surface = cleanBootColor(rawPal.surface)
+    const ink = cleanBootColor(rawPal.ink)
+    const muted = cleanBootColor(rawPal.muted)
+    const olive = cleanBootColor(rawPal.olive)
+    const brass = cleanBootColor(rawPal.brass)
+    const accent = cleanBootColor(rawPal.accent)
+    const accent2 = cleanBootColor(rawPal.accent2)
+    const grid = cleanBootColor(rawPal.grid)
+    if (bg) nextPal.bg = bg
+    if (surface) nextPal.surface = surface
+    if (ink) nextPal.ink = ink
+    if (muted) nextPal.muted = muted
+    if (olive) nextPal.olive = olive
+    if (brass) nextPal.brass = brass
+    if (accent) nextPal.accent = accent
+    if (accent2) nextPal.accent2 = accent2
+    if (grid) nextPal.grid = grid
+    if (Object.keys(nextPal).length > 0) palette = nextPal
+  }
+
+  const subBrand = cleanBootText(obj.subBrand, 96)
+  const systemTag = cleanBootText(obj.systemTag, 120)
+  const division = cleanBootText(obj.division, 120)
+  const coordinates = cleanBootText(obj.coordinates, 120)
+  const specCode = cleanBootText(obj.specCode, 64)
+  const versionTag = cleanBootText(obj.versionTag, 64)
+  const motto = cleanBootText(obj.motto, 120)
+  const confirmEntry = typeof obj.confirmEntry === 'boolean' ? obj.confirmEntry : undefined
+  const entryReadyText = cleanBootText(obj.entryReadyText, 96)
+  const entryButtonText = cleanBootText(obj.entryButtonText, 96)
+  const entryHintText = cleanBootText(obj.entryHintText, 96)
+  const accessPrompt = cleanBootText(obj.accessPrompt, 96)
+  const identityText = cleanBootText(obj.identityText, 96)
+  const requestText = cleanBootText(obj.requestText, 96)
+  const processingText = cleanBootText(obj.processingText, 96)
+  const authorizedText = cleanBootText(obj.authorizedText, 96)
+  const welcomePrefix = cleanBootText(obj.welcomePrefix, 96)
+  const companyTag = cleanBootText(obj.companyTag, 96)
+  const databaseTag = cleanBootText(obj.databaseTag, 96)
+  const poweredBy = cleanBootText(obj.poweredBy, 96)
+  const mastheadSub = cleanBootText(obj.mastheadSub, 96)
+  const mastheadOs = cleanBootText(obj.mastheadOs, 96)
+
+  return {
+    style,
+    durationMs,
+    brand,
+    ...(subBrand ? { subBrand } : {}),
+    ...(systemTag ? { systemTag } : {}),
+    ...(division ? { division } : {}),
+    ...(coordinates ? { coordinates } : {}),
+    ...(specCode ? { specCode } : {}),
+    ...(versionTag ? { versionTag } : {}),
+    ...(motto ? { motto } : {}),
+    ...(confirmEntry !== undefined ? { confirmEntry } : {}),
+    ...(entryReadyText ? { entryReadyText } : {}),
+    ...(entryButtonText ? { entryButtonText } : {}),
+    ...(entryHintText ? { entryHintText } : {}),
+    ...(accessPrompt ? { accessPrompt } : {}),
+    ...(identityText ? { identityText } : {}),
+    ...(requestText ? { requestText } : {}),
+    ...(processingText ? { processingText } : {}),
+    ...(authorizedText ? { authorizedText } : {}),
+    ...(welcomePrefix ? { welcomePrefix } : {}),
+    ...(companyTag ? { companyTag } : {}),
+    ...(databaseTag ? { databaseTag } : {}),
+    ...(poweredBy ? { poweredBy } : {}),
+    ...(mastheadSub ? { mastheadSub } : {}),
+    ...(mastheadOs ? { mastheadOs } : {}),
+    telemetryLines,
+    ...(palette ? { palette } : {}),
+  }
+}
 
 interface ManifestShape {
   name?: string
@@ -46,6 +196,7 @@ interface ManifestShape {
   mcpServers?: unknown
   hooks?: unknown
   apps?: unknown
+  theme?: PluginThemeManifest
   interface?: {
     displayName?: string
     shortDescription?: string
@@ -69,6 +220,9 @@ interface InspectedPlugin {
   mcpProposals: PluginMcpProposal[]
   hasHooks: boolean
   hasAppConnector: boolean
+  hasTheme: boolean
+  hasBootAnimation: boolean
+  themeName?: string
   warnings: string[]
   recommended: boolean
   isBareSingleSkill: boolean
@@ -131,6 +285,8 @@ function originDisplayLabel(origin: PluginOrigin): string {
       return 'Codex'
     case 'antigravity':
       return 'Antigravity'
+    case 'dsh':
+      return 'DeepSeek (DSH)'
     case 'github':
       return 'GitHub'
     case 'workspace':
@@ -250,6 +406,18 @@ function rewriteMcpOptionForDir(option: InstallOption, pluginDir: string): { opt
   }
 }
 
+async function resolveSafeFile(rootReal: string, rel: string): Promise<string | null> {
+  try {
+    const cleanRel = rel.replace(/^\.\//, '')
+    if (!cleanRel) return null
+    const candidate = await resolveInsideReal(rootReal, cleanRel)
+    const st = await stat(candidate)
+    return st.isFile() ? candidate : null
+  } catch {
+    return null
+  }
+}
+
 async function resolveSafeSubdir(rootReal: string, rel: string): Promise<string | null> {
   try {
     const candidate = await resolveInsideReal(rootReal, rel.replace(/^\.\//, ''))
@@ -318,6 +486,8 @@ export async function inspectPluginDirectory(dir: string, fallbackName?: string)
       mcpProposals: [],
       hasHooks: false,
       hasAppConnector: false,
+      hasTheme: false,
+      hasBootAnimation: false,
       warnings: [],
       recommended: true,
       isBareSingleSkill: true,
@@ -391,14 +561,30 @@ export async function inspectPluginDirectory(dir: string, fallbackName?: string)
   const hasHooks = Boolean(manifest?.hooks) || (await exists(join(realDir, 'hooks', 'hooks.json')))
   const hasAppConnector = Boolean(manifest?.apps) || (await exists(join(realDir, '.app.json')))
 
+  const themeCssRel = manifest?.theme?.cssFile?.trim() || 'theme/theme.css'
+  const themeBootRel = manifest?.theme?.bootFile?.trim() || 'theme/boot.json'
+  const resolvedThemeCss = await resolveSafeFile(realDir, themeCssRel)
+  const resolvedThemeBoot = await resolveSafeFile(realDir, themeBootRel)
+  const hasThemeCss = Boolean(resolvedThemeCss)
+  const hasBootAnimation = Boolean(resolvedThemeBoot)
+  const hasTheme = Boolean(hasThemeCss || hasBootAnimation)
+
   // Not a recognizable plugin bundle if it has neither manifest nor components
-  if (!manifest && skillNames.length === 0 && commandNames.length === 0 && ruleFiles.length === 0 && rawOptions.length === 0) {
+  if (
+    !manifest &&
+    skillNames.length === 0 &&
+    commandNames.length === 0 &&
+    ruleFiles.length === 0 &&
+    rawOptions.length === 0 &&
+    !hasTheme
+  ) {
     return null
   }
 
   const rawName = (manifest?.name || manifest?.id || fallbackName || basename(realDir)).trim()
   const displayName = (manifest?.displayName || manifest?.interface?.displayName)?.trim() || undefined
   const id = slugifyPluginId(rawName)
+  const themeName = manifest?.theme?.name?.trim() || (hasTheme ? displayName || rawName : undefined)
   const description =
     (manifest?.description || manifest?.interface?.shortDescription || manifest?.interface?.longDescription || '').trim()
   const author =
@@ -432,7 +618,8 @@ export async function inspectPluginDirectory(dir: string, fallbackName?: string)
   }
 
   const hasUsableMcp = mcpProposals.some((m) => !m.unsupportedRuntime)
-  const recommended = skillNames.length > 0 || commandNames.length > 0 || ruleFiles.length > 0 || hasUsableMcp
+  const recommended =
+    skillNames.length > 0 || commandNames.length > 0 || ruleFiles.length > 0 || hasUsableMcp || hasTheme
 
   return {
     id,
@@ -449,6 +636,9 @@ export async function inspectPluginDirectory(dir: string, fallbackName?: string)
     mcpProposals,
     hasHooks,
     hasAppConnector,
+    hasTheme,
+    hasBootAnimation,
+    ...(themeName ? { themeName } : {}),
     warnings,
     recommended,
     isBareSingleSkill: false,
@@ -603,6 +793,74 @@ export class PluginManager {
     return `<plugin_rules>\n${chunks.join('\n\n')}\n</plugin_rules>`
   }
 
+  /** Returns the active enabled plugin theme CSS (sanitized) and declarative boot config, if any. */
+  async getActiveTheme(): Promise<ActivePluginThemePayload | null> {
+    for (const plugin of this.plugins) {
+      if (!plugin.enabled) continue
+      const realDir = await realpath(plugin.installDir).catch(() => null)
+      if (!realDir) continue
+
+      let manifest: ManifestShape | null = null
+      for (const rel of PLUGIN_MANIFEST_PATHS) {
+        const raw = await readTextIfExists(join(realDir, rel))
+        if (!raw) continue
+        try {
+          manifest = JSON.parse(raw) as ManifestShape
+          break
+        } catch {
+          /* continue */
+        }
+      }
+
+      const cssRel = manifest?.theme?.cssFile?.trim() || 'theme/theme.css'
+      const bootRel = manifest?.theme?.bootFile?.trim() || 'theme/boot.json'
+      const cssFile = await resolveSafeFile(realDir, cssRel)
+      const bootFile = await resolveSafeFile(realDir, bootRel)
+      if (!cssFile && !bootFile) continue
+
+      const rawCss = cssFile ? (await readTextIfExists(cssFile)) ?? '' : ''
+      const css = sanitizePluginCss(rawCss)
+      const rawBoot = bootFile ? await readTextIfExists(bootFile) : null
+      const boot = rawBoot ? parsePluginBootConfig(rawBoot) ?? undefined : undefined
+      if (!css && !boot) continue
+
+      const themeId = slugifyPluginId(manifest?.theme?.id || plugin.id)
+      const pluginName = plugin.displayName || plugin.name
+      const themeName = manifest?.theme?.name?.trim() || plugin.themeName || pluginName
+      const rawChrome = manifest?.theme?.chrome
+      const chrome: 'rhine-lab' | 'none' | undefined =
+        rawChrome === 'rhine-lab' || rawChrome === 'none'
+          ? rawChrome
+          : themeId === 'rhine-lab'
+            ? 'rhine-lab'
+            : undefined
+      const rawEff = manifest?.theme?.effects
+      const effects =
+        rawEff && typeof rawEff === 'object'
+          ? {
+              clickReticle: Boolean(rawEff.clickReticle),
+              telemetryHud: Boolean(rawEff.telemetryHud),
+              rollingClock: Boolean(rawEff.rollingClock),
+              tactileAudio: Boolean(rawEff.tactileAudio),
+              redactionReveal: Boolean(rawEff.redactionReveal),
+              archiveBackdrop: Boolean(rawEff.archiveBackdrop),
+              archiveMode: Boolean(rawEff.archiveMode),
+            }
+          : undefined
+      return {
+        pluginId: plugin.id,
+        pluginName,
+        themeId,
+        themeName,
+        css,
+        ...(boot ? { boot } : {}),
+        ...(chrome ? { chrome } : {}),
+        ...(effects ? { effects } : {}),
+      }
+    }
+    return null
+  }
+
   /** Collects lifecycle hook configs from enabled plugins (`hooks/hooks.json` or manifest `hooks`), cached by revision + mtime. */
   async activeHookSources(): Promise<PluginHookSource[]> {
     if (this.hookCache && this.hookCache.revision === this.hookRevision) {
@@ -725,9 +983,18 @@ export class PluginManager {
     // 3. Codex plugins cache (keep latest version per plugin folder)
     await this.scanVersionedCache(join(home, '.codex', 'plugins', 'cache'), 'codex', pushSource)
 
-    // 4. Workspace plugins
+    // 4. DeepSeek Harness (DSH) plugins & skills
+    const dshHome = process.env.DSH_HOME || join(home, '.dsh')
+    for (const dir of await listSubdirs(join(dshHome, 'plugins'))) {
+      await pushSource(dir, 'dsh')
+    }
+    for (const dir of await listSubdirs(join(dshHome, 'skills'))) {
+      await pushSource(dir, 'dsh')
+    }
+
+    // 5. Workspace plugins
     if (workspace) {
-      for (const relRoot of ['.atrium/plugins', '.claude/plugins', '.codex/plugins']) {
+      for (const relRoot of ['.atrium/plugins', '.claude/plugins', '.codex/plugins', '.dsh/plugins']) {
         for (const dir of await listSubdirs(join(workspace, relRoot))) {
           await pushSource(dir, 'workspace')
         }
@@ -742,7 +1009,7 @@ export class PluginManager {
 
     for (const src of rawSources) {
       const inspected = await inspectPluginDirectory(src.path)
-      if (!inspected || inspected.isBareSingleSkill) continue
+      if (!inspected || (inspected.isBareSingleSkill && src.origin !== 'dsh')) continue
 
       const originIdKey = `${src.origin}:${inspected.id}`
       if (seenOriginIds.has(originIdKey)) continue
@@ -771,6 +1038,9 @@ export class PluginManager {
         mcpProposals: inspected.mcpProposals,
         hasHooks: inspected.hasHooks,
         hasAppConnector: inspected.hasAppConnector,
+        ...(inspected.hasTheme ? { hasTheme: true } : {}),
+        ...(inspected.hasBootAnimation ? { hasBootAnimation: true } : {}),
+        ...(inspected.themeName ? { themeName: inspected.themeName } : {}),
         warnings: inspected.warnings,
         alreadyImported: Boolean(existing),
         ...(existing ? { importedPluginId: existing.id } : {}),
@@ -949,6 +1219,195 @@ export class PluginManager {
     }
   }
 
+  /** Safely packs a local plugin directory (or single SKILL.md folder) into uploadable files for Marketplace review. */
+  async packLocalFolder(folderPath: string): Promise<MarketLocalPackPreview> {
+    const inspected = await inspectPluginDirectory(folderPath)
+    if (!inspected) {
+      throw new Error('Selected folder does not contain a valid plugin manifest, SKILL.md, commands, rules, or MCP configuration.')
+    }
+
+    const realRoot = await realpath(folderPath)
+    const files: MarketBundleFile[] = []
+    let totalBytes = 0
+    let hasScripts = false
+    const MAX_BUNDLE_FILES = 100
+    const MAX_SINGLE_BYTES = 512 * 1024
+    const MAX_TOTAL_BYTES = 1_800_000
+    const TEXT_EXTS = new Set([
+      '.md', '.mdx', '.json', '.txt', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+      '.py', '.sh', '.bash', '.ps1', '.yaml', '.yml', '.toml', '.css', '.html', '.htm', '.svg', '.xml',
+    ])
+
+    const walk = async (currDir: string): Promise<void> => {
+      if (files.length >= MAX_BUNDLE_FILES) return
+      const entries = await readdir(currDir, { withFileTypes: true })
+      entries.sort((a, b) => a.name.localeCompare(b.name))
+      for (const entry of entries) {
+        if (files.length >= MAX_BUNDLE_FILES) break
+        if (SKIP_COPY_DIRS.has(entry.name) || SKIP_COPY_FILES.has(entry.name)) continue
+        const full = join(currDir, entry.name)
+        const resolved = await realpath(full).catch(() => null)
+        if (!resolved) continue
+        const rel = relative(realRoot, resolved).replace(/\\/g, '/')
+        if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue
+        const st = await stat(resolved).catch(() => null)
+        if (!st) continue
+        if (st.isDirectory()) {
+          await walk(resolved)
+        } else if (st.isFile()) {
+          if (st.size > MAX_SINGLE_BYTES) {
+            throw new Error(`File "${rel}" exceeds 512KB limit for Marketplace upload.`)
+          }
+          const lower = rel.toLowerCase()
+          if (
+            /^scripts\//i.test(lower) ||
+            /\.(?:sh|bash|ps1|py|js|mjs|cjs|ts)$/i.test(lower)
+          ) {
+            hasScripts = true
+          }
+          const dot = lower.lastIndexOf('.')
+          const ext = dot >= 0 ? lower.slice(dot) : ''
+          const isText = TEXT_EXTS.has(ext) || lower.endsWith('license') || lower.endsWith('.env.example')
+          const buf = await readFile(resolved)
+          totalBytes += buf.byteLength
+          if (totalBytes > MAX_TOTAL_BYTES) {
+            throw new Error('Total plugin bundle size exceeds 1.8MB limit for Marketplace upload.')
+          }
+          files.push({
+            path: rel,
+            content: buf.toString(isText ? 'utf8' : 'base64'),
+            encoding: isText ? 'utf8' : 'base64',
+            size: buf.byteLength,
+          })
+        }
+      }
+    }
+
+    await walk(realRoot)
+    if (files.length === 0) {
+      throw new Error('No uploadable files found inside the selected plugin folder.')
+    }
+
+    return {
+      folderPath: realRoot,
+      name: inspected.name,
+      ...(inspected.displayName ? { displayName: inspected.displayName } : {}),
+      version: inspected.version || '1.0.0',
+      description: inspected.description,
+      skillNames: inspected.skillNames,
+      commandNames: inspected.commandNames,
+      ruleFiles: inspected.ruleFiles,
+      mcpCount: inspected.mcpProposals.length,
+      hasHooks: inspected.hasHooks,
+      hasScripts,
+      ...(inspected.hasTheme ? { hasTheme: true } : {}),
+      ...(inspected.hasBootAnimation ? { hasBootAnimation: true } : {}),
+      fileCount: files.length,
+      totalBytes,
+      warnings: inspected.warnings,
+      files,
+    }
+  }
+
+  /** Installs a plugin directly from a validated Marketplace bundle payload. */
+  async installFromBundle(opts: {
+    id: string
+    name: string
+    displayName?: string
+    version?: string
+    description: string
+    author?: string
+    repository?: string
+    files: MarketBundleFile[]
+    sourceRef: string
+  }): Promise<PluginImportResult> {
+    if (!Array.isArray(opts.files) || opts.files.length === 0) {
+      throw new Error('Marketplace plugin bundle has no files to install.')
+    }
+    const tempId = `${slugifyPluginId(opts.id || opts.name)}-${newId('tmp').slice(-6)}`
+    const stageDir = join(this.pluginsRootDir(), `.stage-${tempId}`)
+    await rm(stageDir, { recursive: true, force: true })
+    await mkdir(stageDir, { recursive: true })
+    const resolvedStage = resolve(stageDir)
+
+    try {
+      for (const file of opts.files) {
+        const cleanRel = String(file.path || '').replace(/\\/g, '/').trim()
+        if (!cleanRel || cleanRel.startsWith('/') || /^[a-zA-Z]:/.test(cleanRel) || cleanRel.split('/').includes('..')) {
+          throw new Error(`Invalid path in plugin bundle: ${file.path}`)
+        }
+        const target = resolve(resolvedStage, cleanRel)
+        if (!target.startsWith(resolvedStage)) {
+          throw new Error(`Unsafe path in plugin bundle: ${file.path}`)
+        }
+        await mkdir(dirname(target), { recursive: true })
+        const buf =
+          file.encoding === 'base64'
+            ? Buffer.from(file.content, 'base64')
+            : Buffer.from(file.content, 'utf8')
+        await writeFile(target, buf)
+      }
+
+      const inspected = await inspectPluginDirectory(resolvedStage, opts.name)
+      if (!inspected) {
+        throw new Error('Downloaded Marketplace bundle does not form a valid Atrium plugin.')
+      }
+
+      const canonicalId = this.allocateId(slugifyPluginId(opts.id || inspected.id), opts.sourceRef)
+      const destDir = join(this.pluginsRootDir(), canonicalId)
+      const prev = this.plugins.find((p) => p.id === canonicalId)
+      if (prev) {
+        for (const oldMcp of prev.mcpServerIds) {
+          await this.deps.mcp.remove(oldMcp).catch(() => undefined)
+        }
+      }
+
+      await rm(destDir, { recursive: true, force: true })
+      await mkdir(destDir, { recursive: true })
+
+      if (inspected.isBareSingleSkill) {
+        const skillDest = join(destDir, 'skills', slugifyPluginId(inspected.name))
+        await this.safeCopyDir(resolvedStage, skillDest)
+        await writeJson(join(destDir, 'plugin.json'), {
+          name: opts.name || inspected.name,
+          ...(opts.displayName ? { displayName: opts.displayName } : {}),
+          ...(opts.version ? { version: opts.version } : {}),
+          description: opts.description || inspected.description || '',
+          ...(opts.author ? { author: opts.author } : {}),
+          ...(opts.repository ? { repository: opts.repository } : {}),
+        })
+      } else {
+        await cp(resolvedStage, destDir, { recursive: true })
+        const hasAnyManifest = await someAsync(PLUGIN_MANIFEST_PATHS, (rel) => exists(join(destDir, rel)))
+        if (!hasAnyManifest) {
+          await writeJson(join(destDir, 'plugin.json'), {
+            name: opts.name || inspected.name,
+            ...(opts.displayName ? { displayName: opts.displayName } : {}),
+            ...(opts.version ? { version: opts.version } : {}),
+            description: opts.description || inspected.description || '',
+            ...(opts.author ? { author: opts.author } : {}),
+            ...(opts.repository ? { repository: opts.repository } : {}),
+          })
+        }
+      }
+
+      const finalized = await this.finalizeInstalledPlugin({
+        id: canonicalId,
+        destDir,
+        sourcePath: opts.sourceRef,
+        origin: 'atrium',
+      })
+      return {
+        installed: [finalized.plugin],
+        skipped: [],
+        createdMcpServers: finalized.createdMcpServers,
+        warnings: finalized.warnings,
+      }
+    } finally {
+      await rm(stageDir, { recursive: true, force: true })
+    }
+  }
+
   async setEnabled(id: string, enabled: boolean): Promise<InstalledPlugin[]> {
     const target = this.plugins.find((p) => p.id === id)
     if (!target) throw new Error(`Plugin "${id}" was not found.`)
@@ -1006,6 +1465,7 @@ export class PluginManager {
     if (norm.includes('/.claude/plugins/')) return 'claude-code'
     if (norm.includes('/.codex/plugins/')) return 'codex'
     if (norm.includes('/.gemini/config/plugins/')) return 'antigravity'
+    if (norm.includes('/.dsh/')) return 'dsh'
     return 'local'
   }
 
@@ -1110,6 +1570,9 @@ export class PluginManager {
       commandNames: inspected.commandNames,
       ruleFiles: inspected.ruleFiles,
       mcpServerIds,
+      ...(inspected.hasTheme ? { hasTheme: true } : {}),
+      ...(inspected.hasBootAnimation ? { hasBootAnimation: true } : {}),
+      ...(inspected.themeName ? { themeName: inspected.themeName } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     }
 
@@ -1237,7 +1700,7 @@ function isRelevantGithubFile(rel: string): boolean {
   const lower = rel.toLowerCase()
   if (PLUGIN_MANIFEST_PATHS.includes(lower) || MCP_CONFIG_FILES.includes(lower)) return true
   if (lower === 'skill.md' || lower === 'readme.md' || lower === 'license' || lower === 'agents.md' || lower === 'claude.md') return true
-  if (/^(?:skills|commands|rules|scripts|references|assets|examples|resources)\//.test(lower)) return true
+  if (/^(?:skills|commands|rules|scripts|references|assets|examples|resources|theme)\//.test(lower)) return true
   return false
 }
 

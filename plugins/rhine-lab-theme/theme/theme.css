@@ -1,0 +1,1271 @@
+/* ==========================================================================
+   RHINE LAB // ANALYSIS OS — FULL UI RECONSTRUCTION v3.0.0
+   Inspired by Arknights "Rhine Lab: Access" PV & LBEILC/RhineLabUI
+   Author: Lucas Qiu
+   Palette: Archival Warm Limestone (#E8E5E1) · Mineral Slate (#11181B)
+            Obsidian Ink (#080A08) · Warm Brass (#9B7247) · Dry Olive (#565C46)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. ARCHIVAL DAYLIGHT / MINERAL SLATE TOKENS
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] {
+  color-scheme: light;
+
+  /* Archival Warm Limestone Paper & Matte Polymer Surfaces */
+  --bg-shell: #dfdcd6;
+  --bg-side: #e3e0da;
+  --bg: #e8e5e1;
+  --surface: #f2f0ea;
+  --subtle: #dfdcd4;
+  --bubble: #dedad1;
+  --code-bg: #e1ded6;
+
+  /* Obsidian Charcoal & Muted Stone Olive Ink */
+  --ink: #080a08;
+  --ink-2: #2e302a;
+  --muted: #6e6c64;
+  --faint: #989389;
+
+  /* RhineLabUI Secondary Brass & Dry Olive Identity */
+  --rl-olive: #565c46;
+  --rl-olive-deep: #353b30;
+  --rl-olive-soft: #7a8163;
+  --rl-olive-pip: #8b8f75;
+  --rl-olive-tint: rgba(86, 92, 70, 0.10);
+  --rl-olive-border: rgba(86, 92, 70, 0.34);
+
+  --rl-brass: #9b7247;
+  --rl-brass-hover: #835d35;
+  --rl-brass-tint: rgba(155, 114, 71, 0.12);
+  --rl-brass-border: rgba(155, 114, 71, 0.38);
+  --rl-amber: #ed821b;
+
+  /* Inverted Architectural Primary CTAs (+ SAVE ARCHIVE / solid-button) */
+  --rl-cta-bg: #1f221c;
+  --rl-cta-hover: #353b30;
+  --rl-cta-ink: #f0eee5;
+
+  --accent: #9b7247;
+  --accent-hover: #835d35;
+  --accent-ink: #f7f5ef;
+  --accent-text: #7d5932;
+  --accent-soft: #b68c5d;
+  --accent-tint: rgba(155, 114, 71, 0.12);
+  --accent-border: rgba(155, 114, 71, 0.38);
+
+  /* Clinical Telemetry Status */
+  --ok: #565c46;
+  --ok-tint: rgba(86, 92, 70, 0.13);
+  --danger: #9e382e;
+  --danger-tint: rgba(158, 56, 46, 0.11);
+  --danger-solid: #a33a30;
+  --danger-solid-hover: #872b22;
+  --warn: #a67d48;
+  --warn-tint: rgba(166, 125, 72, 0.14);
+
+  /* Crisp Swiss Hairlines & Diffused Studio Daylight Shadows */
+  --line: rgba(23, 23, 19, 0.13);
+  --line-strong: rgba(23, 23, 19, 0.25);
+  --hover: rgba(155, 114, 71, 0.08);
+  --active: rgba(23, 23, 19, 0.09);
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.65) inset, 0 4px 16px -8px rgba(72, 60, 44, 0.12);
+  --shadow-composer: 0 8px 26px -10px rgba(72, 60, 44, 0.12), 0 1px 3px rgba(23, 23, 19, 0.06);
+  --shadow-composer-focus: 0 12px 32px -10px rgba(86, 92, 70, 0.18), 0 0 0 1px var(--ink-2);
+  --shadow-sheet: -4px 0 24px -8px rgba(72, 60, 44, 0.10);
+  --shadow-float: 0 26px 95px rgba(99, 81, 58, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  --scrim: rgba(227, 224, 215, 0.52);
+
+  /* Sharp Swiss Archival Geometry */
+  --r-chip: 1px;
+  --r-sm: 1px;
+  --r-md: 2px;
+  --r-lg: 2px;
+  --r-xl: 2px;
+  --r-composer: 2px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Oculus Prism: Pearl Acrylic + Warm Anodized Brass + Dry Olive Core */
+  --oculus-a1: #d9bf9c;
+  --oculus-a2: #9b7247;
+  --oculus-b1: #8b8f75;
+  --oculus-b2: #565c46;
+  --oculus-c1: #f5f3ec;
+  --oculus-c2: #aaa59a;
+  --oculus-core-left: #f7f5ef;
+  --oculus-core-right: #ed821b;
+  --oculus-core-base: #353b30;
+
+  /* Swiss Studio Code Palette */
+  --tok-comment: #858075;
+  --tok-string: #4d5c40;
+  --tok-keyword: #8c5c2b;
+  --tok-type: #353b30;
+  --tok-number: #a66a28;
+  --tok-func: #495a58;
+  --tok-prop: #6e5b4e;
+  --tok-op: #5a584e;
+  --tok-add: #455939;
+  --tok-add-bg: rgba(86, 92, 70, 0.12);
+  --tok-del: #9e382e;
+  --tok-del-bg: rgba(158, 56, 46, 0.10);
+  --tok-hunk: #9b7247;
+}
+
+/* Dark Polarity: Official RhineLabUI Mineral Slate-Obsidian (#11181B) */
+:root[data-plugin-theme='rhine-lab'][data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-shell: #0c1114;
+  --bg-side: #10171a;
+  --bg: #11181b;
+  --surface: #1b2429;
+  --subtle: #243036;
+  --bubble: #1e282d;
+  --code-bg: #0e1417;
+
+  --ink: #e0e3dc;
+  --ink-2: #bec6c4;
+  --muted: #98a4a6;
+  --faint: #627075;
+
+  --rl-olive: #8b9882;
+  --rl-olive-deep: #5e6b58;
+  --rl-olive-soft: #a4b29b;
+  --rl-olive-pip: #8b9882;
+  --rl-olive-tint: rgba(139, 152, 130, 0.14);
+  --rl-olive-border: rgba(139, 152, 130, 0.34);
+
+  --rl-brass: #c5a16b;
+  --rl-brass-hover: #d7b785;
+  --rl-brass-tint: rgba(197, 161, 107, 0.15);
+  --rl-brass-border: rgba(197, 161, 107, 0.40);
+  --rl-amber: #ed821b;
+
+  --rl-cta-bg: #e0e3dc;
+  --rl-cta-hover: #ffffff;
+  --rl-cta-ink: #11181b;
+
+  --accent: #c5a16b;
+  --accent-hover: #d7b785;
+  --accent-ink: #11181b;
+  --accent-text: #d7b785;
+  --accent-soft: #d7b785;
+  --accent-tint: rgba(197, 161, 107, 0.15);
+  --accent-border: rgba(197, 161, 107, 0.40);
+
+  --ok: #8ec4a6;
+  --ok-tint: rgba(142, 196, 166, 0.14);
+  --danger: #e07b72;
+  --danger-tint: rgba(224, 123, 114, 0.14);
+  --danger-solid: #c94e45;
+  --danger-solid-hover: #dd5d54;
+  --warn: #d7b785;
+  --warn-tint: rgba(215, 183, 133, 0.14);
+
+  --line: rgba(224, 227, 220, 0.12);
+  --line-strong: rgba(224, 227, 220, 0.24);
+  --hover: rgba(197, 161, 107, 0.09);
+  --active: rgba(224, 227, 220, 0.12);
+
+  --shadow-card: 0 4px 16px -4px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --shadow-composer: 0 12px 32px -8px rgba(0, 0, 0, 0.56), 0 1px 3px rgba(0, 0, 0, 0.34);
+  --shadow-composer-focus: 0 14px 36px -8px rgba(0, 0, 0, 0.64), 0 0 0 1px var(--accent-border);
+  --shadow-sheet: -8px 0 28px -8px rgba(0, 0, 0, 0.58);
+  --shadow-float: 0 26px 95px rgba(0, 0, 0, 0.65), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  --scrim: rgba(17, 24, 27, 0.66);
+
+  --oculus-a1: #e5c694;
+  --oculus-a2: #c5a16b;
+  --oculus-b1: #9eb098;
+  --oculus-b2: #536166;
+  --oculus-c1: #cad3d1;
+  --oculus-c2: #445257;
+  --oculus-core-left: #e0e3dc;
+  --oculus-core-right: #ed821b;
+  --oculus-core-base: #364348;
+
+  --tok-comment: #768588;
+  --tok-string: #9cc4a2;
+  --tok-keyword: #dfba82;
+  --tok-type: #c2d4cd;
+  --tok-number: #e5aa6b;
+  --tok-func: #89b7bf;
+  --tok-prop: #c6b8d8;
+  --tok-op: #9aa7a9;
+  --tok-add: #8ec4a6;
+  --tok-add-bg: rgba(142, 196, 166, 0.15);
+  --tok-del: #e07b72;
+  --tok-del-bg: rgba(224, 123, 114, 0.15);
+  --tok-hunk: #c5a16b;
+}
+
+/* --------------------------------------------------------------------------
+   2. PV KEYFRAMES (REDACTION-BAR WIPE, SURFACE REVEAL & LOADING HAIRLINE)
+   -------------------------------------------------------------------------- */
+
+@keyframes rl-panel-unfold {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes rl-redaction-wipe {
+  0% {
+    transform: scaleX(1);
+    opacity: 0.94;
+  }
+  20% {
+    transform: scaleX(1);
+    opacity: 0.94;
+  }
+  100% {
+    transform: scaleX(0);
+    opacity: 0.94;
+  }
+}
+
+@keyframes rl-bar-sweep {
+  0% { transform: translateX(-80px); }
+  100% { transform: translateX(320px); }
+}
+
+/* --------------------------------------------------------------------------
+   3. ARCHITECTURAL SHELL, STUDIO ATMOSPHERE & VERTICAL RULER-TICK SIDEBAR
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] ::-webkit-scrollbar-thumb {
+  border-radius: 1px;
+  background: var(--line-strong);
+}
+
+:root[data-plugin-theme='rhine-lab'] ::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .main {
+  position: relative;
+  isolation: isolate;
+  border-radius: 0;
+  border-left: 1px solid var(--line-strong);
+  background-color: var(--bg);
+}
+
+:root[data-plugin-theme='rhine-lab'] .main > :not(.rl-archive-backdrop) {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-plugin-theme='rhine-lab'] .chat,
+:root[data-plugin-theme='rhine-lab'] .start,
+:root[data-plugin-theme='rhine-lab'] .feature-page,
+:root[data-plugin-theme='rhine-lab'] .market-page,
+:root[data-plugin-theme='rhine-lab'] .connections-page {
+  background: transparent;
+}
+
+:root[data-plugin-theme='rhine-lab'] .app.collapsed .main {
+  border-left-width: 0;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-aurora-top {
+  background: radial-gradient(circle, var(--rl-olive-tint) 0%, transparent 74%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-aurora-bottom {
+  background: radial-gradient(circle at 38% 64%, var(--rl-brass-tint) 0%, transparent 74%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-ambient-dots {
+  opacity: 0.24;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-seam-beam {
+  width: 1px;
+  background: var(--line-strong);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-seam-beam::after {
+  background: linear-gradient(180deg, transparent 0%, var(--accent) 50%, transparent 100%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .brand-badge {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .brand-badge::after {
+  border-radius: 2px;
+  border-color: var(--rl-brass-border);
+}
+
+:root[data-plugin-theme='rhine-lab'] .brand-name {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-group-label,
+:root[data-plugin-theme='rhine-lab'] .side-ws-label {
+  font-family: var(--font-code);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Primary Dispatch Trigger: Clean Gallery New Chat Button */
+:root[data-plugin-theme='rhine-lab'] .new-chat {
+  border-radius: 2px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease), transform 0.08s ease;
+}
+
+:root[data-plugin-theme='rhine-lab'] .new-chat::after {
+  background: linear-gradient(112deg, transparent 36%, var(--rl-brass-tint) 50%, transparent 64%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .new-chat:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+  transform: translate3d(0, -1px, 0);
+}
+
+:root[data-plugin-theme='rhine-lab'] .new-chat:active {
+  transform: translate3d(0, 1px, 0) scale(0.985);
+}
+
+:root[data-plugin-theme='rhine-lab'] .new-chat-plus {
+  border-radius: 1px;
+  background: var(--rl-cta-bg);
+  color: var(--rl-cta-ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-workspace-btn,
+:root[data-plugin-theme='rhine-lab'] .side-search,
+:root[data-plugin-theme='rhine-lab'] .side-kbd,
+:root[data-plugin-theme='rhine-lab'] .side-search-cmd {
+  border-radius: 2px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-ws-icon {
+  border-radius: 2px;
+  background: var(--rl-olive-tint);
+  color: var(--rl-olive);
+}
+
+/* Vertical Ruler-Tick Motion on Nav & Thread Items (LBEILC/RhineLabUI signature) */
+:root[data-plugin-theme='rhine-lab'] .side-item:not(.new-chat),
+:root[data-plugin-theme='rhine-lab'] .chat-item {
+  position: relative;
+  border-radius: 2px;
+  transition:
+    background 0.16s var(--ease),
+    transform 0.18s var(--ease),
+    color 0.16s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item:not(.new-chat)::before,
+:root[data-plugin-theme='rhine-lab'] .chat-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 10px;
+  border-radius: 0;
+  background: var(--line-strong);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: height 0.22s var(--ease), background 0.16s var(--ease), opacity 0.16s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item:not(.new-chat):hover,
+:root[data-plugin-theme='rhine-lab'] .chat-item:hover {
+  transform: translate3d(3px, 0, 0);
+  background: var(--hover);
+  color: var(--accent-text);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item:not(.new-chat):hover::before,
+:root[data-plugin-theme='rhine-lab'] .chat-item:hover::before {
+  opacity: 1;
+  height: 20px;
+  background: var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item.active,
+:root[data-plugin-theme='rhine-lab'] .chat-item.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item.active::before,
+:root[data-plugin-theme='rhine-lab'] .chat-item.active::before {
+  opacity: 1;
+  height: 24px;
+  background: var(--ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-item:not(.new-chat):active,
+:root[data-plugin-theme='rhine-lab'] .chat-item:active {
+  transform: translate3d(1px, 1px, 0) scale(0.985);
+  transition-duration: 0.06s;
+}
+
+:root[data-plugin-theme='rhine-lab'] .chat-item-ws,
+:root[data-plugin-theme='rhine-lab'] .chat-import-pill {
+  border-radius: 1px;
+  font-family: var(--font-code);
+  font-size: 9.5px;
+}
+
+/* --------------------------------------------------------------------------
+   4. ARCHITECTURAL BUTTONS, INVERTED PRIMARY CTAS & SQUARE SWITCHES
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] .btn,
+:root[data-plugin-theme='rhine-lab'] .topbar-btn,
+:root[data-plugin-theme='rhine-lab'] .topbar-upgrade-btn,
+:root[data-plugin-theme='rhine-lab'] .topbar-update-pill,
+:root[data-plugin-theme='rhine-lab'] .ws-quick-btn,
+:root[data-plugin-theme='rhine-lab'] .msg-action-btn,
+:root[data-plugin-theme='rhine-lab'] .code-copy-btn {
+  position: relative;
+  overflow: hidden;
+  border-radius: 2px;
+  transition:
+    background 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    color 0.16s var(--ease),
+    transform 0.14s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .btn:hover:not(:disabled):not(.btn-primary):not(.btn-approve):not(.btn-accent):not(.btn-danger),
+:root[data-plugin-theme='rhine-lab'] .topbar-btn:hover,
+:root[data-plugin-theme='rhine-lab'] .ws-quick-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--hover);
+  transform: translate3d(0, -1px, 0);
+}
+
+:root[data-plugin-theme='rhine-lab'] .btn:active:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .topbar-btn:active,
+:root[data-plugin-theme='rhine-lab'] .icon-btn:active:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .ws-quick-btn:active,
+:root[data-plugin-theme='rhine-lab'] .msg-action-btn:active,
+:root[data-plugin-theme='rhine-lab'] .code-copy-btn:active {
+  transform: translate3d(0, 1px, 0) scale(0.97);
+  transition-duration: 0.06s;
+}
+
+/* Inverted Obsidian/Ivory Primary CTAs matching .solid-button */
+:root[data-plugin-theme='rhine-lab'] .btn-primary,
+:root[data-plugin-theme='rhine-lab'] .btn-approve,
+:root[data-plugin-theme='rhine-lab'] .btn-accent,
+:root[data-plugin-theme='rhine-lab'] .send-btn {
+  border-radius: 2px;
+  border-color: var(--rl-cta-bg);
+  background: var(--rl-cta-bg);
+  color: var(--rl-cta-ink);
+  box-shadow: none;
+}
+
+:root[data-plugin-theme='rhine-lab'] .btn-primary svg,
+:root[data-plugin-theme='rhine-lab'] .btn-approve svg,
+:root[data-plugin-theme='rhine-lab'] .btn-accent svg,
+:root[data-plugin-theme='rhine-lab'] .send-btn svg {
+  color: inherit;
+}
+
+:root[data-plugin-theme='rhine-lab'] .btn-primary:hover:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .btn-approve:hover:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .btn-accent:hover:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .send-btn:hover:not(:disabled) {
+  background: var(--rl-cta-hover);
+  border-color: var(--rl-cta-hover);
+  color: var(--rl-cta-ink);
+  transform: translate3d(0, -1px, 0);
+}
+
+:root[data-plugin-theme='rhine-lab'] .icon-btn {
+  border-radius: 2px;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), transform 0.12s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--accent-text);
+}
+
+/* Inverted Segmented Controls & Tabs (matching 清晰/磨砂 & detail-tabs) */
+:root[data-plugin-theme='rhine-lab'] .seg,
+:root[data-plugin-theme='rhine-lab'] .scene-seg,
+:root[data-plugin-theme='rhine-lab'] .hist-nav,
+:root[data-plugin-theme='rhine-lab'] .studio-tabs,
+:root[data-plugin-theme='rhine-lab'] .steps {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: var(--subtle);
+}
+
+:root[data-plugin-theme='rhine-lab'] .seg-btn,
+:root[data-plugin-theme='rhine-lab'] .scene-btn,
+:root[data-plugin-theme='rhine-lab'] .studio-tab,
+:root[data-plugin-theme='rhine-lab'] .preset-pill,
+:root[data-plugin-theme='rhine-lab'] .market-scope-pill,
+:root[data-plugin-theme='rhine-lab'] .platform-role-btn,
+:root[data-plugin-theme='rhine-lab'] .platform-preset-btn,
+:root[data-plugin-theme='rhine-lab'] .sim-toggle-pill,
+:root[data-plugin-theme='rhine-lab'] .context-limit-pill {
+  border-radius: 1px;
+  transition:
+    background 0.18s var(--ease),
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .seg-btn:active,
+:root[data-plugin-theme='rhine-lab'] .scene-btn:active,
+:root[data-plugin-theme='rhine-lab'] .studio-tab:active,
+:root[data-plugin-theme='rhine-lab'] .preset-pill:active,
+:root[data-plugin-theme='rhine-lab'] .market-scope-pill:active,
+:root[data-plugin-theme='rhine-lab'] .platform-role-btn:active {
+  transform: scale(0.96);
+  transition-duration: 0.06s;
+}
+
+:root[data-plugin-theme='rhine-lab'] .seg-btn.active {
+  background: var(--rl-olive-deep);
+  color: #f5f1e9;
+}
+
+:root[data-plugin-theme='rhine-lab'][data-theme='dark'] .seg-btn.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+:root[data-plugin-theme='rhine-lab'] .scene-glider,
+:root[data-plugin-theme='rhine-lab'] .studio-tab-glider {
+  border-radius: 1px;
+  box-shadow: inset 0 -2px 0 var(--ink), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .scene-glider.animate,
+:root[data-plugin-theme='rhine-lab'] .studio-tab-glider.animate {
+  transition-timing-function: var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .preset-pill.active,
+:root[data-plugin-theme='rhine-lab'] .market-scope-pill.active,
+:root[data-plugin-theme='rhine-lab'] .sim-toggle-pill.on,
+:root[data-plugin-theme='rhine-lab'] .platform-preset-btn.active {
+  background: var(--rl-cta-bg);
+  border-color: var(--rl-cta-bg);
+  color: var(--rl-cta-ink);
+}
+
+/* Signature Rectangular Archival Toggle Switch */
+:root[data-plugin-theme='rhine-lab'] .switch span {
+  border-radius: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--subtle);
+  transition: background 0.24s var(--ease), border-color 0.2s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .switch span::after {
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  transition: transform 0.24s var(--ease), background 0.18s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .switch input:checked + span {
+  background: var(--rl-olive);
+  border-color: var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'][data-theme='dark'] .switch input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'][data-theme='dark'] .switch input:checked + span::after {
+  background: var(--bg);
+}
+
+:root[data-plugin-theme='rhine-lab'] .switch:active span::after {
+  transform: scale(0.92);
+}
+
+:root[data-plugin-theme='rhine-lab'] .switch:active input:checked + span::after {
+  transform: translateX(16px) scale(0.92);
+}
+
+/* Chips & Tiles */
+:root[data-plugin-theme='rhine-lab'] .chip,
+:root[data-plugin-theme='rhine-lab'] .skill-asset-chip,
+:root[data-plugin-theme='rhine-lab'] .plugin-origin-pill,
+:root[data-plugin-theme='rhine-lab'] .skill-scope-pill {
+  border-radius: 1px;
+  font-family: var(--font-code);
+  font-size: 10px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .tile {
+  border-radius: 2px;
+  border: 1px solid var(--line);
+}
+
+:root[data-plugin-theme='rhine-lab'] .tile-tone-0 { background: var(--rl-brass-tint); color: var(--accent-text); border-color: var(--rl-brass-border); }
+:root[data-plugin-theme='rhine-lab'] .tile-tone-1 { background: var(--rl-olive-tint); color: var(--rl-olive); border-color: var(--rl-olive-border); }
+
+/* --------------------------------------------------------------------------
+   5. TOPBAR, GALLERY DOSSIER WELCOME, CHAT STREAM & COMPOSER
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] .topbar {
+  position: relative;
+  border-bottom: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+:root[data-plugin-theme='rhine-lab'] .topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 72px;
+  height: 2px;
+  background: var(--ink);
+  pointer-events: none;
+}
+
+:root[data-plugin-theme='rhine-lab'] .topbar-pill {
+  border-radius: 1px;
+  font-family: var(--font-code);
+  font-size: 10.5px;
+}
+
+/* Gallery Welcome Card + Frosted Acrylic Depth */
+:root[data-plugin-theme='rhine-lab'] .start-hero {
+  border-radius: 2px;
+  border: 1px solid var(--line-strong);
+  background:
+    repeating-linear-gradient(-32deg, color-mix(in srgb, var(--line) 62%, transparent) 0 1px, transparent 1px 28px),
+    color-mix(in srgb, var(--surface) 76%, transparent);
+  backdrop-filter: blur(16px) saturate(1.06);
+  box-shadow: inset 0 2px 0 var(--ink), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .start-hero::before {
+  opacity: 0;
+}
+
+:root[data-plugin-theme='rhine-lab'] .start-hero::after {
+  background: radial-gradient(60% 65% at 50% 35%, var(--rl-brass-tint) 0%, transparent 74%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .start-hero h1 {
+  position: relative;
+  display: inline-block;
+}
+
+:root[data-plugin-theme='rhine-lab'] .start-hero h1::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+  background: var(--ink);
+  pointer-events: none;
+  transform-origin: right center;
+  transform: scaleX(0);
+  animation: rl-redaction-wipe 0.65s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+:root[data-plugin-theme='rhine-lab'] .start-emblem {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: var(--bg);
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .emblem-ring.ring-1 {
+  border-color: var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .emblem-ring.ring-2 {
+  border-color: var(--rl-olive-border);
+}
+
+:root[data-plugin-theme='rhine-lab'] .emblem-ring.ring-2::before,
+:root[data-plugin-theme='rhine-lab'] .emblem-ring.ring-2::after {
+  background: var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .studio-pill {
+  border-radius: 1px;
+  border-color: var(--line-strong);
+  background: var(--bg);
+  font-family: var(--font-code);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+
+:root[data-plugin-theme='rhine-lab'] .studio-pill-dot {
+  border-radius: 0;
+  background: var(--rl-olive-pip);
+}
+
+:root[data-plugin-theme='rhine-lab'] .starter-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: inset 2px 0 0 var(--rl-olive-pip), var(--shadow-card);
+  transition:
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .starter-card:hover {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), 0 8px 20px -10px rgba(72, 60, 44, 0.22);
+  transform: translate3d(0, -2px, 0);
+}
+
+:root[data-plugin-theme='rhine-lab'] .starter-card:active {
+  transform: translate3d(0, 1px, 0) scale(0.985);
+  transition-duration: 0.06s;
+}
+
+:root[data-plugin-theme='rhine-lab'] .starter-icon {
+  border-radius: 2px;
+}
+
+/* Conversation Stream, Calm Running Progress Line, Code & Composer */
+:root[data-plugin-theme='rhine-lab'] .msg-user {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--bubble) 86%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: inset -2px 0 0 var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .msg-model,
+:root[data-plugin-theme='rhine-lab'] .msg-usage {
+  border-radius: 1px;
+  font-family: var(--font-code);
+}
+
+:root[data-plugin-theme='rhine-lab'] .thinking-bar {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 2px 0 0 var(--ink), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .thinking-wave span {
+  border-radius: 0;
+  background: var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .thinking-tool .thinking-wave span {
+  background: var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .code-block,
+:root[data-plugin-theme='rhine-lab'] .md pre {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--code-bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+:root[data-plugin-theme='rhine-lab'] .code-block-head {
+  font-family: var(--font-code);
+  background: color-mix(in srgb, var(--subtle) 78%, var(--code-bg));
+  border-bottom-color: var(--line-strong);
+}
+
+:root[data-plugin-theme='rhine-lab'] .code-lang {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .tool-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+/* Signature RhineLabUI sliding bar during active tool run */
+:root[data-plugin-theme='rhine-lab'] .tool-row.tool-running::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 72px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--ink), var(--accent), transparent);
+  animation: rl-bar-sweep 1.3s linear infinite;
+}
+
+:root[data-plugin-theme='rhine-lab'] .approval {
+  border-radius: 2px;
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent), var(--shadow-card);
+}
+
+/* Composer Command Console + Center-Out Calibration Hairline */
+/* Isolate frosted backdrop blur into ::after so it never turns .composer into a containing block for position:fixed popovers */
+:root[data-plugin-theme='rhine-lab'] .composer:not(.compact),
+:root[data-plugin-theme='rhine-lab'] .composer.compact .composer-pill {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: transparent;
+  backdrop-filter: none;
+  isolation: isolate;
+}
+
+:root[data-plugin-theme='rhine-lab'] .composer.compact {
+  background: transparent;
+  border: 0;
+  backdrop-filter: none;
+}
+
+:root[data-plugin-theme='rhine-lab'] .composer:not(.compact)::after,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .composer-pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  backdrop-filter: blur(16px);
+  pointer-events: none;
+}
+
+:root[data-plugin-theme='rhine-lab'] .composer:not(.compact)::before,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .composer-pill::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--rl-olive) 0%, var(--accent) 50%, var(--rl-olive) 100%);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.24s var(--ease);
+  pointer-events: none;
+}
+
+:root[data-plugin-theme='rhine-lab'] .composer:not(.compact):focus-within::before,
+:root[data-plugin-theme='rhine-lab'] .composer-pill:focus-within::before {
+  transform: scaleX(1);
+}
+
+:root[data-plugin-theme='rhine-lab'] .tool-chip,
+:root[data-plugin-theme='rhine-lab'] .worktree-toggle,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .model-pick,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .perm-pick,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .plus-btn {
+  border-radius: 2px;
+  transition:
+    background 0.14s var(--ease),
+    border-color 0.14s var(--ease),
+    color 0.14s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .tool-chip:active,
+:root[data-plugin-theme='rhine-lab'] .worktree-toggle:active,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .model-pick:active,
+:root[data-plugin-theme='rhine-lab'] .composer.compact .perm-pick:active {
+  transform: scale(0.95);
+}
+
+:root[data-plugin-theme='rhine-lab'] .disclaimer {
+  text-align: left;
+  padding-left: 2px;
+  font-size: 10.5px;
+}
+
+@media (max-width: 960px) {
+  :root[data-plugin-theme='rhine-lab'] .rl-hud-powered,
+  :root[data-plugin-theme='rhine-lab'] .rl-hud-bar {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   6. FROSTED ACRYLIC MODALS, POPOVERS & REDACTION-BAR TITLE WIPES
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] .backdrop {
+  backdrop-filter: blur(18px);
+}
+
+:root[data-plugin-theme='rhine-lab'] .model-popover {
+  backdrop-filter: blur(18px);
+}
+
+:root[data-plugin-theme='rhine-lab'] .dialog,
+:root[data-plugin-theme='rhine-lab'] .feature-modal,
+:root[data-plugin-theme='rhine-lab'] .settings-modal,
+:root[data-plugin-theme='rhine-lab'] .palette,
+:root[data-plugin-theme='rhine-lab'] .workspace-popover,
+:root[data-plugin-theme='rhine-lab'] .tools-popover,
+:root[data-plugin-theme='rhine-lab'] .context-popover,
+:root[data-plugin-theme='rhine-lab'] .model-popover,
+:root[data-plugin-theme='rhine-lab'] .perm-popover,
+:root[data-plugin-theme='rhine-lab'] .plus-popover,
+:root[data-plugin-theme='rhine-lab'] .ctx-menu,
+:root[data-plugin-theme='rhine-lab'] .studio-select-popover {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  border-top: 2px solid var(--ink);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .dialog,
+:root[data-plugin-theme='rhine-lab'] .feature-modal,
+:root[data-plugin-theme='rhine-lab'] .settings-modal,
+:root[data-plugin-theme='rhine-lab'] .palette {
+  animation: rl-panel-unfold 0.24s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .modal-head h2,
+:root[data-plugin-theme='rhine-lab'] .dialog-head h3 {
+  position: relative;
+  display: inline-block;
+}
+
+:root[data-plugin-theme='rhine-lab'] .modal-head h2::after,
+:root[data-plugin-theme='rhine-lab'] .dialog-head h3::after {
+  content: '';
+  position: absolute;
+  inset: 0 -2px;
+  background: var(--ink);
+  pointer-events: none;
+  transform-origin: right center;
+  transform: scaleX(0);
+  animation: rl-redaction-wipe 0.52s var(--ease) backwards;
+}
+
+/* Interactive Option Rows: Vertical Ruler Tick + Slide Glide */
+:root[data-plugin-theme='rhine-lab'] .settings-nav-item,
+:root[data-plugin-theme='rhine-lab'] .palette-item,
+:root[data-plugin-theme='rhine-lab'] .model-option,
+:root[data-plugin-theme='rhine-lab'] .model-suggestion-item,
+:root[data-plugin-theme='rhine-lab'] .perm-option,
+:root[data-plugin-theme='rhine-lab'] .plus-item,
+:root[data-plugin-theme='rhine-lab'] .ctx-menu-item,
+:root[data-plugin-theme='rhine-lab'] .studio-select-option,
+:root[data-plugin-theme='rhine-lab'] .ws-recent-row,
+:root[data-plugin-theme='rhine-lab'] .kind {
+  border-radius: 1px;
+  transition:
+    background 0.14s var(--ease),
+    border-color 0.14s var(--ease),
+    color 0.14s var(--ease),
+    transform 0.16s var(--ease),
+    box-shadow 0.14s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .settings-nav-item:hover,
+:root[data-plugin-theme='rhine-lab'] .palette-item.selected,
+:root[data-plugin-theme='rhine-lab'] .model-option:hover,
+:root[data-plugin-theme='rhine-lab'] .model-suggestion-item:hover,
+:root[data-plugin-theme='rhine-lab'] .perm-option:hover,
+:root[data-plugin-theme='rhine-lab'] .plus-item:hover:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .ctx-menu-item:hover:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .studio-select-option:hover {
+  background: var(--hover);
+  color: var(--accent-text);
+  transform: translate3d(3px, 0, 0);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .settings-nav-item.active,
+:root[data-plugin-theme='rhine-lab'] .model-option.active,
+:root[data-plugin-theme='rhine-lab'] .model-suggestion-item.active,
+:root[data-plugin-theme='rhine-lab'] .studio-select-option.selected,
+:root[data-plugin-theme='rhine-lab'] .ws-recent-row.active,
+:root[data-plugin-theme='rhine-lab'] .kind.on {
+  background: var(--rl-olive-tint);
+  color: var(--ink);
+  box-shadow: inset 2.5px 0 0 var(--ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .settings-nav-item:active,
+:root[data-plugin-theme='rhine-lab'] .palette-item:active,
+:root[data-plugin-theme='rhine-lab'] .model-option:active,
+:root[data-plugin-theme='rhine-lab'] .model-suggestion-item:active,
+:root[data-plugin-theme='rhine-lab'] .perm-option:active,
+:root[data-plugin-theme='rhine-lab'] .plus-item:active:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .ctx-menu-item:active:not(:disabled),
+:root[data-plugin-theme='rhine-lab'] .studio-select-option:active {
+  transform: translate3d(1px, 1px, 0) scale(0.985);
+  transition-duration: 0.06s;
+}
+
+:root[data-plugin-theme='rhine-lab'] .rows,
+:root[data-plugin-theme='rhine-lab'] .settings-card,
+:root[data-plugin-theme='rhine-lab'] .empty-state,
+:root[data-plugin-theme='rhine-lab'] .setting-line,
+:root[data-plugin-theme='rhine-lab'] .runtime-pill,
+:root[data-plugin-theme='rhine-lab'] .option,
+:root[data-plugin-theme='rhine-lab'] .input,
+:root[data-plugin-theme='rhine-lab'] .search,
+:root[data-plugin-theme='rhine-lab'] .model-combo-bar {
+  border-radius: 2px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .settings-nav-group-title,
+:root[data-plugin-theme='rhine-lab'] .palette-group {
+  font-family: var(--font-code);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   7. MARKETPLACE V2, PLATFORM COMMAND DECK & TOASTS
+   -------------------------------------------------------------------------- */
+
+:root[data-plugin-theme='rhine-lab'] .market-toolbar,
+:root[data-plugin-theme='rhine-lab'] .market-search-bar-card,
+:root[data-plugin-theme='rhine-lab'] .market-card,
+:root[data-plugin-theme='rhine-lab'] .market-card-v2,
+:root[data-plugin-theme='rhine-lab'] .fleet-card,
+:root[data-plugin-theme='rhine-lab'] .platform-agent-card,
+:root[data-plugin-theme='rhine-lab'] .platform-task-card,
+:root[data-plugin-theme='rhine-lab'] .platform-topo-node,
+:root[data-plugin-theme='rhine-lab'] .platform-composer-card,
+:root[data-plugin-theme='rhine-lab'] .onboarding-card,
+:root[data-plugin-theme='rhine-lab'] .rp-gate-card {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+:root[data-plugin-theme='rhine-lab'] .market-official-section {
+  border-radius: 2px;
+  border-color: var(--line-strong);
+  background: linear-gradient(180deg, var(--rl-olive-tint) 0%, color-mix(in srgb, var(--bg) 94%, transparent) 100%);
+  box-shadow: inset 0 2px 0 var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .market-card,
+:root[data-plugin-theme='rhine-lab'] .market-card-v2 {
+  transition: border-color 0.16s var(--ease), transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .market-card:hover,
+:root[data-plugin-theme='rhine-lab'] .market-card-v2:hover {
+  border-color: var(--accent);
+  transform: translate3d(0, -2px, 0);
+  box-shadow: 0 8px 20px -10px rgba(72, 60, 44, 0.24);
+}
+
+:root[data-plugin-theme='rhine-lab'] .market-card-v2.is-official {
+  border-color: var(--rl-brass-border);
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .market-author-avatar,
+:root[data-plugin-theme='rhine-lab'] .market-avatar-wrap .tile,
+:root[data-plugin-theme='rhine-lab'] .market-official-seal {
+  border-radius: 2px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .platform-agent-card.is-commander,
+:root[data-plugin-theme='rhine-lab'] .platform-topo-node.commander {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .platform-topo-beam.flowing {
+  background: linear-gradient(90deg, var(--rl-olive) 0%, var(--accent) 50%, var(--rl-olive) 100%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .toast {
+  border-radius: 2px;
+  border-left: 3px solid var(--ink);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+}
+
+/* Dual-Mode HUD Switcher & Header Quick Trigger */
+:root[data-plugin-theme='rhine-lab'] .rl-mode-switch {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  overflow: hidden;
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-mode-btn {
+  height: 15px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-mode-btn:hover {
+  color: var(--ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-mode-btn.active {
+  background: var(--rl-cta-bg);
+  color: var(--rl-cta-ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-archive-quick-btn {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 2px;
+  border: 1px solid var(--rl-brass-border);
+  background: var(--rl-brass-tint);
+  color: var(--accent-text);
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), color 0.16s var(--ease), transform 0.12s var(--ease);
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-archive-quick-btn.compact {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-top {
+  gap: 6px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .side-top-acts {
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+:root[data-plugin-theme='rhine-lab'] .brand-name {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-archive-quick-btn:hover {
+  background: var(--rl-cta-bg);
+  border-color: var(--rl-cta-bg);
+  color: var(--rl-cta-ink);
+}
+
+:root[data-plugin-theme='rhine-lab'] .rl-archive-quick-btn:active {
+  transform: scale(0.95);
+}
+
+/* Live Task Plan Dock & Tool Checklist (Rhine Lab Architectural Calibration) */
+:root[data-plugin-theme='rhine-lab'] .plan-dock {
+  border-radius: 2px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-dock.is-done {
+  border-color: var(--rl-olive-border);
+  box-shadow: inset 2px 0 0 var(--rl-olive), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-dock.is-failed {
+  border-color: var(--danger);
+  box-shadow: inset 2px 0 0 var(--danger), var(--shadow-card);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-dock-kicker {
+  border-radius: 1px;
+  font-family: var(--font-code);
+  letter-spacing: 0.06em;
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-dock-fill {
+  background: linear-gradient(90deg, var(--rl-olive) 0%, var(--accent) 100%);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-dock.is-done .plan-dock-fill {
+  background: var(--rl-olive);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-step {
+  border-radius: 2px;
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-step.is-in_progress {
+  background: var(--rl-brass-tint);
+  border-left: 2px solid var(--accent);
+}
+
+:root[data-plugin-theme='rhine-lab'] .plan-step-badge {
+  border-radius: 1px;
+  font-family: var(--font-code);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-plugin-theme='rhine-lab'] *,
+  :root[data-plugin-theme='rhine-lab'] *::before,
+  :root[data-plugin-theme='rhine-lab'] *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

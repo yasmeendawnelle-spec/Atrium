@@ -87,6 +87,8 @@ const api: AtriumApi = {
     openBrowserWindow: (url?: string) => ipcRenderer.invoke('app.openBrowserWindow', url),
     syncBrowserView: (layout: BrowserViewLayout | null) => ipcRenderer.invoke('app.syncBrowserView', layout),
     dockBrowserView: () => ipcRenderer.invoke('app.dockBrowserView'),
+    readArchiveModel: (name: 'archive-cassette.glb' | 'archive-assembly.glb') =>
+      ipcRenderer.invoke('app.readArchiveModel', name),
     setTitleBarTheme: (dark: boolean) => ipcRenderer.send('app.titleBarTheme', dark),
     pathForFile: (file: unknown) => {
       try {

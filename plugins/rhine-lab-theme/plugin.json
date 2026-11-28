@@ -1,0 +1,27 @@
+{
+  "id": "rhine-lab-theme",
+  "name": "rhine-lab-theme",
+  "displayName": "Rhine Lab · 莱茵生命",
+  "version": "4.0.0",
+  "description": "《明日方舟 · 莱茵生命：访问》PV 与 RhineLabUI 致敬重构版。内置工作台 / 3D 档案提取双模式切换（Three.js PBR 物理亚克力晶体卡盒、5 列阵列抽取、黑条解密预览、360° 六层结构拆解与一键跳回工作台）、温润石灰岩/深矿石双极性、进入确认闸门与 Web Audio 玻璃声效。",
+  "author": {
+    "name": "Lucas Qiu"
+  },
+  "theme": {
+    "id": "rhine-lab",
+    "name": "Rhine Lab · 莱茵生命",
+    "cssFile": "theme/theme.css",
+    "bootFile": "theme/boot.json",
+    "defaultColorMode": "light",
+    "chrome": "rhine-lab",
+    "effects": {
+      "clickReticle": true,
+      "telemetryHud": true,
+      "rollingClock": true,
+      "tactileAudio": true,
+      "redactionReveal": true,
+      "archiveBackdrop": true,
+      "archiveMode": true
+    }
+  }
+}

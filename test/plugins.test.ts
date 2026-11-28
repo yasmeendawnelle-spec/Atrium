@@ -4,8 +4,16 @@ import assert from 'node:assert/strict'
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { McpServerConfig } from '../src/shared/types.ts'
-import { inspectGithubTreeForPlugin, inspectPluginDirectory, PluginManager } from '../src/core/plugins.ts'
+import {
+  inspectGithubTreeForPlugin,
+  inspectPluginDirectory,
+  parsePluginBootConfig,
+  PluginManager,
+  sanitizePluginCss,
+} from '../src/core/plugins.ts'
+import { handleMarketRequest, type MarketObjectStore } from '../deploy/market-worker/src/handler.js'
 import { systemPrompt } from '../src/core/prompt.ts'
 import { SkillsManager } from '../src/core/tools/skills.ts'
 
@@ -410,5 +418,176 @@ test('inspectGithubTreeForPlugin & PluginManager.importGithub import GitHub subd
     assert.deepEqual(installed.ruleFiles, ['rules/policy.md'])
     assert.equal(mcp.list().length, 1)
     assert.equal(mcp.list()[0]?.enabled, false)
+  })
+})
+
+test('sanitizePluginCss and parsePluginBootConfig enforce strict declarative boundaries', () => {
+  const dirtyCss = [
+    '@import url("https://evil.example/leak.css");',
+    ':root[data-plugin-theme="x"] { --bg: #090d14; background: url(https://track.example/p.png); }',
+    '.a { width: expression(alert(1)); background-image: url("data:image/svg+xml;utf8,<svg></svg>"); behavior: url(foo.htc); }',
+    '.b { background: javascript:alert(1); }',
+  ].join('\n')
+  const clean = sanitizePluginCss(dirtyCss)
+  assert.ok(!clean.includes('@import url'))
+  assert.ok(!clean.includes('https://track.example'))
+  assert.ok(!clean.includes('expression('))
+  assert.ok(!clean.includes('behavior:'))
+  assert.ok(!clean.includes('javascript:'))
+  assert.ok(clean.includes('--bg: #090d14'))
+  assert.ok(clean.includes('data:image/svg+xml'))
+
+  assert.equal(parsePluginBootConfig('{bad json'), null)
+  assert.equal(parsePluginBootConfig(JSON.stringify({ style: 'rhine-lab-orbital' })), null)
+
+  const parsedBoot = parsePluginBootConfig(
+    JSON.stringify({
+      style: 'rhine-lab-access',
+      durationMs: 99999,
+      brand: '  RHINE LAB \x00 ',
+      telemetryLines: ['  [01] OK  ', 123, ''],
+      palette: {
+        bg: '#e8e5e1',
+        brass: '#9b7247',
+        accent: 'rgb(242, 116, 56)',
+        accent2: 'expression(alert(1))',
+      },
+    }),
+  )
+  assert.ok(parsedBoot)
+  assert.equal(parsedBoot.style, 'rhine-lab-access')
+  assert.equal(parsedBoot.durationMs, 4500)
+  assert.equal(parsedBoot.brand, 'RHINE LAB')
+  assert.deepEqual(parsedBoot.telemetryLines, ['[01] OK'])
+  assert.equal(parsedBoot.palette?.bg, '#e8e5e1')
+  assert.equal(parsedBoot.palette?.brass, '#9b7247')
+  assert.equal(parsedBoot.palette?.accent, 'rgb(242, 116, 56)')
+  assert.equal(parsedBoot.palette?.accent2, undefined)
+})
+
+test('Rhine Lab theme & boot plugin loads cleanly, toggles activeTheme, and packs for Official Marketplace', async () => {
+  const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
+  const pluginDir = join(repoRoot, 'plugins', 'rhine-lab-theme')
+
+  const inspected = await inspectPluginDirectory(pluginDir)
+  assert.ok(inspected)
+  assert.equal(inspected.id, 'rhine-lab-theme')
+  assert.equal(inspected.author, 'Lucas Qiu')
+  assert.equal(inspected.hasTheme, true)
+  assert.equal(inspected.hasBootAnimation, true)
+  assert.equal(inspected.recommended, true)
+
+  await withTempDirs(async ({ appDir, homeDir }) => {
+    const manager = new PluginManager({ dir: appDir, homeDir, mcp: createFakeMcpAdapter() })
+    await manager.load()
+    assert.equal(await manager.getActiveTheme(), null)
+
+    const res = await manager.importFolder(pluginDir)
+    assert.equal(res.installed.length, 1)
+    assert.equal(res.installed[0]?.hasTheme, true)
+    assert.equal(res.installed[0]?.hasBootAnimation, true)
+
+    const active = await manager.getActiveTheme()
+    assert.ok(active)
+    assert.equal(active.themeId, 'rhine-lab')
+    assert.equal(active.chrome, 'rhine-lab')
+    assert.deepEqual(active.effects, {
+      clickReticle: true,
+      telemetryHud: true,
+      rollingClock: true,
+      tactileAudio: true,
+      redactionReveal: true,
+      archiveBackdrop: true,
+      archiveMode: true,
+    })
+    assert.ok(active.css.includes('--bg: #e8e5e1'))
+    assert.ok(active.css.includes('--rl-olive: #565c46'))
+    assert.ok(active.css.includes('--accent: #9b7247'))
+    assert.ok(active.css.includes(":root[data-plugin-theme='rhine-lab'][data-theme='dark']"))
+    assert.ok(active.css.includes('@keyframes rl-redaction-wipe'))
+    assert.ok(active.css.length < 128 * 1024)
+    assert.equal(active.boot?.brand, 'RHINE LAB')
+    assert.equal(active.boot?.style, 'rhine-lab-access')
+    assert.equal(active.boot?.confirmEntry, true)
+    assert.equal(active.boot?.entryReadyText, 'INTERNAL DATABASE / READY')
+    assert.equal(active.boot?.accessPrompt, 'ACCESS PERMISSION REQUIRED')
+    assert.equal(active.boot?.companyTag, 'RHINE LAB.LLC.')
+    assert.equal(active.boot?.palette?.olive, '#565c46')
+    assert.equal(active.boot?.palette?.brass, '#9b7247')
+    assert.equal(active.boot?.palette?.accent, '#ed821b')
+    assert.equal(active.boot?.specCode, 'SPEC.NO // RL-X-001')
+
+    await manager.setEnabled('rhine-lab-theme', false)
+    assert.equal(await manager.getActiveTheme(), null)
+
+    await manager.setEnabled('rhine-lab-theme', true)
+    assert.equal((await manager.getActiveTheme())?.themeId, 'rhine-lab')
+
+    // Verify packed bundle passes Cloudflare Worker Official Co-contributor submission validation
+    const packed = await manager.packLocalFolder(pluginDir)
+    assert.equal(packed.hasTheme, true)
+    assert.equal(packed.hasBootAnimation, true)
+    assert.equal(packed.hasScripts, false)
+
+    const kv = new Map<string, unknown>()
+    const store: MarketObjectStore = {
+      async getJson(k) {
+        return kv.has(k) ? structuredClone(kv.get(k)) : null
+      },
+      async putJson(k, v) {
+        kv.set(k, structuredClone(v))
+      },
+      async delete(k) {
+        kv.delete(k)
+      },
+    }
+    const submitRes = await handleMarketRequest(
+      new Request('https://market.example.com/api/market/plugins', {
+        method: 'POST',
+        headers: { authorization: 'Bearer tok-co', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: packed.name,
+          displayName: packed.displayName,
+          version: packed.version,
+          description: packed.description,
+          submissionKind: 'bundle',
+          targetSection: 'official',
+          hasTheme: packed.hasTheme,
+          hasBootAnimation: packed.hasBootAnimation,
+          files: packed.files,
+        }),
+      }),
+      store,
+      {
+        authOrigin: 'https://auth.example.com',
+        coContributorEmails: 'lucas@example.com',
+        reviewerEmails: 'lucas@example.com',
+        githubRepo: '',
+        fetchImpl: (async (input: string | URL | Request) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          if (url.endsWith('/api/user/profile')) {
+            return new Response(
+              JSON.stringify({
+                user: { email: 'lucas@example.com', display_name: 'Lucas Qiu', avatar: 'https://example.com/lucas.png' },
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          return new Response('Not Found', { status: 404 })
+        }) as typeof fetch,
+      },
+    )
+    assert.equal(submitRes.status, 201)
+    const submitJson = (await submitRes.json()) as {
+      plugin: { status: string; section: string; hasTheme: boolean; hasBootAnimation: boolean; author: { name: string } }
+    }
+    assert.equal(submitJson.plugin.status, 'approved')
+    assert.equal(submitJson.plugin.section, 'official')
+    assert.equal(submitJson.plugin.hasTheme, true)
+    assert.equal(submitJson.plugin.hasBootAnimation, true)
+    assert.equal(submitJson.plugin.author.name, 'Lucas Qiu')
+
+    await manager.remove('rhine-lab-theme')
+    assert.equal(await manager.getActiveTheme(), null)
   })
 })

@@ -604,6 +604,20 @@ ipcMain.handle('app.openExternal', async (_event, url: unknown) => {
   await shell.openExternal(url)
 })
 
+ipcMain.handle('app.readArchiveModel', (_event, name: unknown): Uint8Array | null => {
+  if (name !== 'archive-cassette.glb' && name !== 'archive-assembly.glb') return null
+  const candidates = [
+    join(__dirname, '../renderer/assets', name),
+    join(__dirname, '../../src/renderer/public/assets', name),
+  ]
+  for (const file of candidates) {
+    if (existsSync(file)) {
+      return new Uint8Array(readFileSync(file))
+    }
+  }
+  return null
+})
+
 function resolveValidatedPath(targetPath: unknown, workspace?: unknown): string {
   if (typeof targetPath !== 'string' || !targetPath.trim()) throw new Error('Path is required.')
   const cleanTarget = targetPath.trim()

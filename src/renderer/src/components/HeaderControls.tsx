@@ -1,9 +1,10 @@
-import { Briefcase, ChevronLeft, ChevronRight, Code2 } from 'lucide-react'
+import { Box, Briefcase, ChevronLeft, ChevronRight, Code2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WorkScene } from '@shared/types.ts'
 import { call, errorMessage } from '../lib/api.ts'
 import { useGlider } from '../lib/glider.ts'
-import { canGoBack, canGoForward, goBack, goForward, setState, toast, useStore } from '../lib/store.ts'
+import { playRhineSound, unlockRhineAudio } from '../lib/rhineAudio.ts'
+import { canGoBack, canGoForward, goBack, goForward, setArchiveModeOpen, setState, toast, useStore } from '../lib/store.ts'
 
 export function HistoryNavButtons() {
   const { t } = useTranslation()
@@ -33,6 +34,27 @@ export function HistoryNavButtons() {
         <ChevronRight size={16} />
       </button>
     </div>
+  )
+}
+
+export function ArchiveModeQuickButton({ compact = false }: { compact?: boolean }) {
+  const hasArchiveMode = useStore((s) => Boolean(s.activePluginTheme?.effects?.archiveMode))
+  if (!hasArchiveMode) return null
+  return (
+    <button
+      type="button"
+      className={`rl-archive-quick-btn${compact ? ' compact' : ''}`}
+      onClick={() => {
+        unlockRhineAudio()
+        playRhineSound('array')
+        setArchiveModeOpen(true)
+      }}
+      title="进入 Rhine Lab 3D 档案提取模式 (Ctrl+Shift+A)"
+      aria-label="进入 Rhine Lab 3D 档案提取模式"
+    >
+      <Box size={13} strokeWidth={2} />
+      {!compact && <span>档案模式</span>}
+    </button>
   )
 }
 

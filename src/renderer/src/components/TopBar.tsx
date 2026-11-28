@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Download, PanelLeft, RotateCw, Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { installAppUpdate, openUpdatePrompt, toggleSidebar, useStore } from '../lib/store.ts'
-import { HistoryNavButtons, WorkSceneSwitch } from './HeaderControls.tsx'
+import { ArchiveModeQuickButton, HistoryNavButtons, WorkSceneSwitch } from './HeaderControls.tsx'
 
 /** The strip along the top of the page. It drags the window; its right edge stays clear for the window buttons. */
 export function TopBar({ children, trailing }: { children?: ReactNode; trailing?: ReactNode }) {
@@ -27,6 +27,7 @@ export function TopBar({ children, trailing }: { children?: ReactNode; trailing?
             </button>
             <HistoryNavButtons />
             <WorkSceneSwitch />
+            <ArchiveModeQuickButton />
           </>
         )}
         {children}

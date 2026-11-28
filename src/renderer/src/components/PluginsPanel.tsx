@@ -6,6 +6,8 @@ import {
   FolderOpen,
   GitBranch,
   KeyRound,
+  Palette,
+  Play,
   Plug,
   RefreshCw,
   Sparkles,
@@ -14,14 +16,17 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { InstalledPlugin, McpServerConfig, PluginDetail, PluginOrigin } from '@shared/types.ts'
 import { call, errorMessage } from '../lib/api.ts'
+import { unlockRhineAudio } from '../lib/rhineAudio.ts'
 import {
   refreshPlugins,
+  replayPluginBoot,
   scanLocalPlugins,
   setState,
   toast,
   togglePluginEnabled,
   useStore,
 } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { ConfirmDialog, Dialog } from './Dialog.tsx'
 import { Oculus } from './Oculus.tsx'
 import { Tile } from './Tile.tsx'
@@ -185,6 +190,7 @@ function PluginRow({
   servers: McpServerConfig[]
 }) {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<PluginDetail | null>(null)
   const [confirmRemove, setConfirmRemove] = useState(false)
@@ -255,6 +261,19 @@ function PluginRow({
           {plugin.mcpServerIds.length > 0 && (
             <span className="skill-asset-chip">{t('plugins.mcpCount', { count: plugin.mcpServerIds.length })}</span>
           )}
+          {plugin.hasTheme && (
+            <span className="skill-asset-chip plugin-theme-chip">
+              <Palette size={10} />
+              {ft('plugins.themeChip')}
+            </span>
+          )}
+          {plugin.hasBootAnimation && (
+            <span className="skill-asset-chip plugin-theme-chip">
+              <Sparkles size={10} />
+              {ft('plugins.bootChip')}
+            </span>
+          )}
+          {plugin.author && <span className="row-meta">{ft('plugins.authorBy', { author: plugin.author })}</span>}
           {warnings.length > 0 && (
             <span className="plugin-warn-chip" title={warnings.join('\n')}>
               <AlertTriangle size={11} />
@@ -266,6 +285,20 @@ function PluginRow({
       </div>
 
       <div className="row-actions">
+        {plugin.enabled && plugin.hasBootAnimation && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-small plugin-boot-preview-btn"
+            onClick={() => {
+              unlockRhineAudio()
+              replayPluginBoot()
+            }}
+            title={ft('plugins.previewBoot')}
+          >
+            <Play size={12} />
+            <span>{ft('plugins.previewBoot')}</span>
+          </button>
+        )}
         <label className="switch">
           <input
             type="checkbox"
