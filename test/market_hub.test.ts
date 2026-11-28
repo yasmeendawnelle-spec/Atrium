@@ -553,3 +553,126 @@ test('Cloudflare Worker automatically recognizes GitHub Atrium contributors, cac
   assert.equal(meStranger.isCoContributor, false)
   assert.equal(meStranger.isReviewer, false)
 })
+
+test('Cloudflare Worker market handler auto-syncs official repo plugins/* with contributor avatars and install flow', async () => {
+  const store = createKvMockStore()
+  const manifestJson = JSON.stringify({
+    id: 'rhine-lab-theme',
+    name: 'rhine-lab-theme',
+    displayName: 'Rhine Lab · 莱茵生命',
+    version: '4.0.0',
+    description: 'Official Rhine Lab theme plugin with 3D archive extraction mode.',
+    author: { name: 'Lucas Qiu' },
+    theme: { id: 'rhine-lab', name: 'Rhine Lab', cssFile: 'theme/theme.css', bootFile: 'theme/boot.json' },
+  })
+  const themeCss = ":root[data-plugin-theme='rhine-lab'] { --bg: #e8e5e1; }"
+  const bootJson = JSON.stringify({ style: 'rhine-lab-access', durationMs: 3600, brand: 'RHINE LAB' })
+
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url === 'https://api.github.com/repos/yasmeendawnelle-spec/Atrium/contributors?per_page=100') {
+      return new Response(
+        JSON.stringify([{ login: 'Reimu-miu', avatar_url: 'https://avatars.githubusercontent.com/u/276154778?v=4' }]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    if (url === 'https://api.github.com/repos/yasmeendawnelle-spec/Atrium/git/trees/main?recursive=1') {
+      return new Response(
+        JSON.stringify({
+          tree: [
+            { path: 'plugins/rhine-lab-theme/plugin.json', type: 'blob', size: manifestJson.length },
+            { path: 'plugins/rhine-lab-theme/theme/theme.css', type: 'blob', size: themeCss.length },
+            { path: 'plugins/rhine-lab-theme/theme/boot.json', type: 'blob', size: bootJson.length },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    if (url === 'https://api.github.com/repos/yasmeendawnelle-spec/Atrium/commits?path=plugins%2Frhine-lab-theme&per_page=1') {
+      return new Response(
+        JSON.stringify([
+          {
+            author: { login: 'Reimu-miu', avatar_url: 'https://avatars.githubusercontent.com/u/276154778?v=4' },
+            commit: { author: { name: 'Lucas Qiu', date: '2026-11-28T11:30:00Z' } },
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    if (url === 'https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/plugins/rhine-lab-theme/plugin.json') {
+      return new Response(manifestJson, { status: 200 })
+    }
+    if (url === 'https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/plugins/rhine-lab-theme/theme/theme.css') {
+      return new Response(themeCss, { status: 200 })
+    }
+    if (url === 'https://raw.githubusercontent.com/yasmeendawnelle-spec/Atrium/main/plugins/rhine-lab-theme/theme/boot.json') {
+      return new Response(bootJson, { status: 200 })
+    }
+    return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+  }) as typeof fetch
+
+  const opts = {
+    authOrigin: 'https://auth.example.com',
+    githubRepo: 'yasmeendawnelle-spec/Atrium',
+    coContributorEmails: '',
+    fetchImpl,
+  }
+
+  // 1. Appears automatically in /healthz and /api/market/catalog
+  const healthRes = await handleMarketRequest(new Request('https://market.example.com/healthz'), store, opts)
+  const healthJson = (await healthRes.json()) as { officialCount: number }
+  assert.equal(healthJson.officialCount, 1)
+
+  const catRes = await handleMarketRequest(new Request('https://market.example.com/api/market/catalog'), store, opts)
+  const catJson = (await catRes.json()) as { official: Array<any>; community: Array<any> }
+  assert.equal(catJson.official.length, 1)
+  assert.equal(catJson.official[0].id, 'rhine-lab-theme')
+  assert.equal(catJson.official[0].displayName, 'Rhine Lab · 莱茵生命')
+  assert.equal(catJson.official[0].author.name, 'Lucas Qiu')
+  assert.equal(catJson.official[0].author.avatar, 'https://avatars.githubusercontent.com/u/276154778?v=4')
+  assert.equal(catJson.official[0].hasTheme, true)
+  assert.equal(catJson.official[0].hasBootAnimation, true)
+
+  // 2. Install-ping increments repo install count & persists into detail/catalog
+  const pingRes = await handleMarketRequest(
+    new Request('https://market.example.com/api/market/plugins/rhine-lab-theme/install-ping', { method: 'POST' }),
+    store,
+    opts,
+  )
+  assert.equal(pingRes.status, 200)
+  assert.equal(((await pingRes.json()) as { installCount: number }).installCount, 1)
+
+  // 3. Plugin detail returns bundled files for one-click install
+  const detailRes = await handleMarketRequest(
+    new Request('https://market.example.com/api/market/plugins/rhine-lab-theme'),
+    store,
+    opts,
+  )
+  assert.equal(detailRes.status, 200)
+  const detailJson = (await detailRes.json()) as { plugin: { installCount: number }; files: Array<{ path: string }> }
+  assert.equal(detailJson.plugin.installCount, 1)
+  assert.equal(detailJson.files.length, 3)
+
+  // 4. Installs end-to-end through MarketHub + PluginManager
+  const dir = await mkdtemp(join(tmpdir(), 'atrium-repo-plugin-'))
+  try {
+    const plugins = new PluginManager({ dir: join(dir, 'app'), homeDir: join(dir, 'home'), mcp: makeMockMcpAdapter() })
+    await plugins.load()
+    const hub = new MarketHub({
+      baseUrl: 'https://market.example.com',
+      plugins,
+      getAccountState: () => ({ origin: 'https://api.rpulse.top', connected: false }),
+      getAuthToken: async () => null,
+      fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+        const req = input instanceof Request ? input : new Request(String(input), init)
+        return handleMarketRequest(req, store, opts)
+      }) as never,
+    })
+    const installed = await hub.installPlugin('rhine-lab-theme')
+    assert.equal(installed.installed[0]?.id, 'rhine-lab-theme')
+    assert.equal(installed.installed[0]?.hasTheme, true)
+    assert.equal((await plugins.getActiveTheme())?.themeId, 'rhine-lab')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -28,6 +28,8 @@ export function summarizeBundleFiles(
   mcpCount: number
   hasHooks: boolean
   hasScripts: boolean
+  hasTheme?: boolean
+  hasBootAnimation?: boolean
   fileCount: number
   totalBytes: number
 }

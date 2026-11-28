@@ -8,6 +8,9 @@ const CORS_HEADERS = {
 const CATALOG_KEY = 'catalog:index'
 const GITHUB_CONTRIBUTORS_CACHE_KEY = 'cache:github-contributors'
 const CONTRIBUTORS_CACHE_TTL_MS = 10 * 60 * 1000
+const REPO_PLUGINS_CACHE_KEY = 'cache:repo-official-plugins'
+const REPO_PLUGINS_CACHE_TTL_MS = 30 * 60 * 1000
+const REPO_INSTALL_COUNT_PREFIX = 'repo-installs:'
 const MAX_BUNDLE_FILES = 100
 const MAX_SINGLE_FILE_BYTES = 512 * 1024
 const MAX_TOTAL_BUNDLE_BYTES = 2 * 1024 * 1024
@@ -364,6 +367,244 @@ function sanitizeTags(rawTags) {
   return out
 }
 
+function isTextPluginFile(relPath) {
+  return /\.(?:md|mdx|json|txt|css|html|htm|svg|xml|yaml|yml|toml|js|mjs|cjs|ts|tsx|jsx|py|sh|bash|ps1)$/i.test(
+    relPath,
+  ) || /^license$/i.test(relPath)
+}
+
+function githubApiHeaders(opts) {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'atrium-market',
+  }
+  if (opts?.githubToken) {
+    headers.authorization = `Bearer ${opts.githubToken}`
+  }
+  return headers
+}
+
+async function loadRepoOfficialPlugins(store, opts = {}, ghContributors = null) {
+  const githubRepo = typeof opts.githubRepo === 'string' ? opts.githubRepo.trim() : ''
+  if (!githubRepo) return []
+
+  const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now()
+  const now = nowFn()
+  let cached = null
+  try {
+    cached = await store.getJson(REPO_PLUGINS_CACHE_KEY)
+  } catch {
+    cached = null
+  }
+
+  if (
+    cached &&
+    cached.repo === githubRepo &&
+    Array.isArray(cached.entries) &&
+    typeof cached.fetchedAt === 'number' &&
+    now - cached.fetchedAt < REPO_PLUGINS_CACHE_TTL_MS
+  ) {
+    return cached.entries
+  }
+
+  const fetcher = opts.fetchImpl || fetch
+  const headers = githubApiHeaders(opts)
+  try {
+    const repoRes = await fetcher(`https://api.github.com/repos/${githubRepo}/git/trees/main?recursive=1`, {
+      method: 'GET',
+      headers,
+    })
+    if (!repoRes.ok) {
+      return cached?.repo === githubRepo && Array.isArray(cached.entries) ? cached.entries : []
+    }
+    const treeJson = await repoRes.json().catch(() => null)
+    const blobs = Array.isArray(treeJson?.tree) ? treeJson.tree : []
+
+    const grouped = new Map()
+    for (const item of blobs) {
+      if (item?.type !== 'blob' || typeof item.path !== 'string') continue
+      if (!item.path.startsWith('plugins/')) continue
+      const rest = item.path.slice('plugins/'.length)
+      const slashIdx = rest.indexOf('/')
+      if (slashIdx <= 0) continue
+      const slug = rest.slice(0, slashIdx)
+      const rel = sanitizeBundlePath(rest.slice(slashIdx + 1))
+      if (!rel || !isTextPluginFile(rel)) continue
+      if (typeof item.size === 'number' && item.size > MAX_SINGLE_FILE_BYTES) continue
+      let list = grouped.get(slug)
+      if (!list) {
+        list = []
+        grouped.set(slug, list)
+      }
+      if (list.length < MAX_BUNDLE_FILES) {
+        list.push({ repoPath: item.path, relPath: rel, expectedSize: Number(item.size) || 0 })
+      }
+    }
+
+    const contribMap = ghContributors || (await loadGithubContributors(store, opts))
+    const encoder = new TextEncoder()
+    const entries = []
+
+    for (const [slug, items] of grouped) {
+      const files = []
+      let totalSize = 0
+      for (const item of items) {
+        const encodedPath = item.repoPath.split('/').map(encodeURIComponent).join('/')
+        const rawRes = await fetcher(`https://raw.githubusercontent.com/${githubRepo}/main/${encodedPath}`, {
+          method: 'GET',
+          headers: { 'user-agent': 'atrium-market' },
+        })
+        if (!rawRes.ok) continue
+        const content = await rawRes.text()
+        const byteSize = encoder.encode(content).byteLength
+        if (byteSize > MAX_SINGLE_FILE_BYTES) continue
+        if (totalSize + byteSize > MAX_TOTAL_BUNDLE_BYTES) continue
+        totalSize += byteSize
+        files.push({ path: item.relPath, content, encoding: 'utf8', size: byteSize })
+      }
+
+      if (!hasRecognizablePluginContent(files)) continue
+      const summary = summarizeBundleFiles(files)
+      const manifestFile = files.find((f) => PLUGIN_MANIFEST_SET.has(f.path.toLowerCase()))
+      let manifest = {}
+      if (manifestFile) {
+        try {
+          manifest = JSON.parse(manifestFile.content) || {}
+        } catch {
+          manifest = {}
+        }
+      }
+
+      const id = slugify(manifest.id || slug)
+      const name = typeof manifest.name === 'string' && manifest.name.trim() ? manifest.name.trim().slice(0, 80) : slug
+      const displayName =
+        typeof manifest.displayName === 'string' && manifest.displayName.trim()
+          ? manifest.displayName.trim().slice(0, 80)
+          : undefined
+      const version =
+        typeof manifest.version === 'string' && manifest.version.trim() ? manifest.version.trim().slice(0, 32) : '1.0.0'
+      const description =
+        typeof manifest.description === 'string' && manifest.description.trim()
+          ? manifest.description.trim().slice(0, 1200)
+          : `Official Atrium plugin (${name}).`
+      const rawAuthorObj =
+        manifest.author && typeof manifest.author === 'object' ? manifest.author : null
+      const manifestAuthorName =
+        typeof manifest.author === 'string'
+          ? manifest.author.trim()
+          : typeof rawAuthorObj?.name === 'string'
+            ? rawAuthorObj.name.trim()
+            : ''
+
+      let commitAvatar = null
+      let commitAuthorLogin = ''
+      let commitAuthorName = ''
+      let commitTs = 0
+      try {
+        const commitsRes = await fetcher(
+          `https://api.github.com/repos/${githubRepo}/commits?path=${encodeURIComponent(`plugins/${slug}`)}&per_page=1`,
+          { method: 'GET', headers },
+        )
+        if (commitsRes.ok) {
+          const commits = await commitsRes.json().catch(() => null)
+          const latest = Array.isArray(commits) ? commits[0] : null
+          commitAvatar = validateAvatar(latest?.author?.avatar_url)
+          commitAuthorLogin = typeof latest?.author?.login === 'string' ? latest.author.login.trim() : ''
+          commitAuthorName =
+            typeof latest?.commit?.author?.name === 'string' ? latest.commit.author.name.trim() : ''
+          const dateStr = latest?.commit?.committer?.date || latest?.commit?.author?.date
+          const parsedTs = typeof dateStr === 'string' ? Date.parse(dateStr) : NaN
+          if (Number.isFinite(parsedTs) && parsedTs > 0) commitTs = parsedTs
+        }
+      } catch {
+        /* ignore commit metadata lookup failure */
+      }
+
+      const matchedContrib = commitAuthorLogin ? contribMap.get(commitAuthorLogin.toLowerCase()) : null
+      const resolvedAvatar =
+        validateAvatar(rawAuthorObj?.avatar) ?? commitAvatar ?? validateAvatar(matchedContrib?.avatar) ?? null
+      const resolvedAuthorName =
+        (manifestAuthorName || commitAuthorName || commitAuthorLogin || githubRepo.split('/')[0] || 'Atrium')
+          .slice(0, 64)
+      const tags = sanitizeTags(manifest.tags)
+      const finalTags = tags.length > 0 ? tags : summary.hasTheme ? ['theme', 'official'] : ['official']
+      const stamp = commitTs || now
+
+      entries.push({
+        plugin: {
+          id,
+          name,
+          ...(displayName ? { displayName } : {}),
+          version,
+          description,
+          ...(typeof manifest.category === 'string' && manifest.category.trim()
+            ? { category: manifest.category.trim().slice(0, 32) }
+            : summary.hasTheme
+              ? { category: 'Theme' }
+              : {}),
+          tags: finalTags,
+          section: 'official',
+          status: 'approved',
+          submissionKind: 'bundle',
+          repoUrl: `https://github.com/${githubRepo}/tree/main/plugins/${encodeURIComponent(slug)}`,
+          author: {
+            name: resolvedAuthorName,
+            email: typeof rawAuthorObj?.email === 'string' ? rawAuthorObj.email.trim().toLowerCase() : '',
+            avatar: resolvedAvatar,
+            role: 'co-contributor',
+          },
+          skillNames: summary.skillNames,
+          commandNames: summary.commandNames,
+          ruleFiles: summary.ruleFiles,
+          mcpCount: summary.mcpCount,
+          hasHooks: summary.hasHooks,
+          hasScripts: summary.hasScripts,
+          ...(summary.hasTheme ? { hasTheme: true } : {}),
+          ...(summary.hasBootAnimation ? { hasBootAnimation: true } : {}),
+          fileCount: summary.fileCount,
+          totalBytes: summary.totalBytes,
+          installCount: 0,
+          createdAt: stamp,
+          updatedAt: stamp,
+        },
+        files,
+      })
+    }
+
+    if (entries.length > 0 || !cached?.entries?.length) {
+      await store
+        .putJson(REPO_PLUGINS_CACHE_KEY, {
+          repo: githubRepo,
+          fetchedAt: now,
+          entries,
+        })
+        .catch(() => undefined)
+    }
+    return entries
+  } catch {
+    return cached?.repo === githubRepo && Array.isArray(cached.entries) ? cached.entries : []
+  }
+}
+
+async function hydrateRepoInstallCount(store, plugin) {
+  const count = await store.getJson(`${REPO_INSTALL_COUNT_PREFIX}${plugin.id}`).catch(() => null)
+  if (typeof count === 'number' && Number.isFinite(count) && count > 0) {
+    return { ...plugin, installCount: count }
+  }
+  return plugin
+}
+
+async function loadMergedCatalog(store, opts = {}, ghContributors = null) {
+  const [manualItems, repoEntries] = await Promise.all([
+    loadCatalog(store),
+    loadRepoOfficialPlugins(store, opts, ghContributors),
+  ])
+  const manualIds = new Set(manualItems.map((i) => i.id))
+  const missingRepo = repoEntries.filter((e) => e?.plugin?.id && !manualIds.has(e.plugin.id))
+  const hydratedRepo = await Promise.all(missingRepo.map((e) => hydrateRepoInstallCount(store, e.plugin)))
+  return [...manualItems, ...hydratedRepo]
+}
+
 export async function handleMarketRequest(request, store, opts = {}) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS })
@@ -377,10 +618,8 @@ export async function handleMarketRequest(request, store, opts = {}) {
   const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now()
 
   if (request.method === 'GET' && path === '/healthz') {
-    const [items, ghContributors] = await Promise.all([
-      loadCatalog(store),
-      loadGithubContributors(store, opts),
-    ])
+    const ghContributors = await loadGithubContributors(store, opts)
+    const items = await loadMergedCatalog(store, opts, ghContributors)
     return jsonResponse({
       ok: true,
       githubRepo: typeof opts.githubRepo === 'string' && opts.githubRepo.trim() ? opts.githubRepo.trim() : null,
@@ -421,7 +660,7 @@ export async function handleMarketRequest(request, store, opts = {}) {
   if (request.method === 'GET' && path === '/api/market/catalog') {
     const q = (url.searchParams.get('q') || '').trim().toLowerCase()
     const section = (url.searchParams.get('section') || '').trim().toLowerCase()
-    const approved = sortNewestFirst((await loadCatalog(store)).filter((i) => i.status === 'approved'))
+    const approved = sortNewestFirst((await loadMergedCatalog(store, opts)).filter((i) => i.status === 'approved'))
     const official =
       !section || section === 'official'
         ? approved.filter((i) => i.section === 'official' && matchesQuery(i, q))
@@ -459,12 +698,20 @@ export async function handleMarketRequest(request, store, opts = {}) {
     const id = decodeURIComponent(pingMatch[1])
     const items = await loadCatalog(store)
     const idx = items.findIndex((i) => i.id === id)
-    if (idx === -1) return jsonResponse({ error: 'Plugin not found.' }, 404)
-    if (items[idx].status !== 'approved') return jsonResponse({ error: 'Plugin is not published.' }, 403)
-    const updated = { ...items[idx], installCount: Number(items[idx].installCount || 0) + 1 }
-    items[idx] = updated
-    await saveCatalog(store, items)
-    return jsonResponse({ ok: true, installCount: updated.installCount })
+    if (idx !== -1) {
+      if (items[idx].status !== 'approved') return jsonResponse({ error: 'Plugin is not published.' }, 403)
+      const updated = { ...items[idx], installCount: Number(items[idx].installCount || 0) + 1 }
+      items[idx] = updated
+      await saveCatalog(store, items)
+      return jsonResponse({ ok: true, installCount: updated.installCount })
+    }
+    const repoEntries = await loadRepoOfficialPlugins(store, opts)
+    const repoMatch = repoEntries.find((e) => e?.plugin?.id === id)
+    if (!repoMatch) return jsonResponse({ error: 'Plugin not found.' }, 404)
+    const prevCount = Number(await store.getJson(`${REPO_INSTALL_COUNT_PREFIX}${id}`).catch(() => 0)) || 0
+    const nextCount = prevCount + 1
+    await store.putJson(`${REPO_INSTALL_COUNT_PREFIX}${id}`, nextCount)
+    return jsonResponse({ ok: true, installCount: nextCount })
   }
 
   const pluginMatch = /^\/api\/market\/plugins\/([^/]+)$/.exec(path)
@@ -472,19 +719,27 @@ export async function handleMarketRequest(request, store, opts = {}) {
     const id = decodeURIComponent(pluginMatch[1])
     const items = await loadCatalog(store)
     const plugin = items.find((i) => i.id === id)
-    if (!plugin) return jsonResponse({ error: 'Plugin not found.' }, 404)
-    if (plugin.status !== 'approved') {
-      const user = await verifyUser(request, store, opts)
-      if (!user) return jsonResponse({ error: 'Authentication required.' }, 401)
-      const isAuthor = plugin.author?.email?.toLowerCase() === user.email
-      if (!isAuthor && !user.isReviewer) {
-        return jsonResponse({ error: 'Not authorized to inspect unapproved plugin.' }, 403)
+    if (plugin) {
+      if (plugin.status !== 'approved') {
+        const user = await verifyUser(request, store, opts)
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401)
+        const isAuthor = plugin.author?.email?.toLowerCase() === user.email
+        if (!isAuthor && !user.isReviewer) {
+          return jsonResponse({ error: 'Not authorized to inspect unapproved plugin.' }, 403)
+        }
       }
+      const bundle = plugin.submissionKind === 'bundle' ? await store.getJson(`bundle:${plugin.id}`) : null
+      return jsonResponse({
+        plugin,
+        ...(Array.isArray(bundle?.files) ? { files: bundle.files } : {}),
+      })
     }
-    const bundle = plugin.submissionKind === 'bundle' ? await store.getJson(`bundle:${plugin.id}`) : null
+    const repoEntries = await loadRepoOfficialPlugins(store, opts)
+    const repoEntry = repoEntries.find((e) => e?.plugin?.id === id)
+    if (!repoEntry) return jsonResponse({ error: 'Plugin not found.' }, 404)
     return jsonResponse({
-      plugin,
-      ...(Array.isArray(bundle?.files) ? { files: bundle.files } : {}),
+      plugin: await hydrateRepoInstallCount(store, repoEntry.plugin),
+      files: repoEntry.files,
     })
   }
 
