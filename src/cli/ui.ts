@@ -9,7 +9,7 @@ import {
 } from './theme.ts'
 
 export interface Spinner {
-  start: (label: string) => void
+  start: (label: string, initialMeta?: string) => void
   update: (label: string) => void
   setMeta: (meta: string) => void
   stop: () => void
@@ -74,13 +74,12 @@ export function createSpinner(opts: {
   }
 
   return {
-    start(nextLabel: string) {
+    start(nextLabel: string, initialMeta?: string) {
       if (!enabled) return
       label = nextLabel
-      metaText = ''
+      metaText = initialMeta ? initialMeta.trim() : ''
       if (!timer) {
         startedAt = Date.now()
-        frameIdx = 0
         draw()
         timer = setInterval(draw, 95)
         timer.unref?.()
@@ -538,6 +537,7 @@ export function renderHelpCard(palette: CliPalette, cols?: number): string {
     cmd('/provider', 'Add, test, or switch BYOK'),
     cmd('/effort [lvl]', 'Slider: auto…xhigh|max'),
     cmd('/ultracode', 'Toggle multi-agent workflows'),
+    cmd('/orchestrator', 'Planner directs fast executor'),
     cmd('/mode <name>', 'auto|accept_edits|plan|man'),
     cmd('/scene <kind>', 'Switch code or work focus'),
     cmd('/context <n>', 'Context cap (auto, 128k)'),
@@ -565,6 +565,7 @@ export function renderHelpCard(palette: CliPalette, cols?: number): string {
     cmd('/policy', 'Project policy & secret guard'),
     cmd('/fleet', 'Parallel worktree fleet'),
     cmd('/preview', 'Managed dev preview server'),
+    cmd('/import', 'Import sessions from other agents'),
   ]
 
   const keysSection = [

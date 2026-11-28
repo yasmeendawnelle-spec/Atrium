@@ -32,9 +32,11 @@ import {
   handleCommitCommand,
   handleConfigCommand,
   handleEffortCommand,
+  handleOrchestratorCommand,
   handleUltracodeCommand,
   handleFleetCommand,
   handleGitCommand,
+  handleImportSessionsCommand,
   handleMcpCommand,
   handleMemoryCommand,
   handlePermissionsCommand,
@@ -98,6 +100,7 @@ const SLASH_COMMANDS: readonly ComposerCommandItem[] = [
   { cmd: '/provider', hint: 'Switch, add preset/env BYOK, test, or sync providers' },
   { cmd: '/effort', hint: 'Drag the reasoning effort slider (auto…max, u = ultracode)' },
   { cmd: '/ultracode', hint: 'Toggle Ultracode multi-agent workflows (on/off)' },
+  { cmd: '/orchestrator', hint: 'Configure dual-model Orchestrator (on/off/auto/<fast-model>)' },
   { cmd: '/mode', hint: 'Switch permission mode (auto/accept_edits/plan/manual/bypass)' },
   { cmd: '/scene', hint: 'Switch work scene (code/work)' },
   { cmd: '/context', hint: 'Configure context window size' },
@@ -130,6 +133,7 @@ const SLASH_COMMANDS: readonly ComposerCommandItem[] = [
   { cmd: '/policy', hint: 'Inspect, test, or update .atrium/policy.json security guardrails' },
   { cmd: '/fleet', hint: 'Launch, inspect, merge, or discard parallel Git worktree workers' },
   { cmd: '/preview', hint: 'Start, inspect logs, or stop a local dev preview server' },
+  { cmd: '/import', hint: 'Import sessions from Claude Code, Codex, DSH, Antigravity, Cursor, or folder' },
   { cmd: '/thinking', hint: 'Toggle streaming reasoning display (or Ctrl+O)' },
   { cmd: '/clear', hint: 'Clear terminal and redraw welcome dashboard (or Ctrl+L)' },
   { cmd: '/exit', hint: 'Exit Atrium CLI' },
@@ -928,6 +932,10 @@ export async function runInteractiveRepl(
         await handleUltracodeCommand(runtime, arg, commandIo)
         return 'continue'
 
+      case '/orchestrator':
+        await handleOrchestratorCommand(runtime, arg, commandIo)
+        return 'continue'
+
       case '/config':
         await handleConfigCommand(runtime, renderer, askWithPrompt, commandIo)
         return 'continue'
@@ -1216,6 +1224,15 @@ export async function runInteractiveRepl(
 
       case '/preview':
         await handlePreviewCommand(runtime, conversation, arg, commandIo)
+        return 'continue'
+
+      case '/import':
+        await handleImportSessionsCommand(runtime, arg, commandIo, async (nextConv) => {
+          conversation = nextConv
+          await refreshWorkspaceMeta()
+          updateWindowTitle(false)
+        })
+        await refreshWorkspaceMeta()
         return 'continue'
 
       case '/diff': {

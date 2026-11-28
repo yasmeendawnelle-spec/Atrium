@@ -38,6 +38,8 @@ export interface ParsedCliArgs {
   scene?: WorkScene
   effort?: ReasoningEffort
   ultracode?: boolean
+  orchestrator?: boolean
+  executorModel?: string
   resume?: string | true
   continueWorkspace: boolean
   forkSession: boolean
@@ -293,6 +295,16 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       case '--no-ultracode':
         result.ultracode = false
         break
+      case '--orchestrator':
+        result.orchestrator = true
+        break
+      case '--no-orchestrator':
+        result.orchestrator = false
+        break
+      case '--executor-model':
+      case '--fast-model':
+        result.executorModel = readVal()
+        break
       case '-n':
       case '--name':
         result.sessionName = readVal()
@@ -376,6 +388,7 @@ Commands:
   mcp <list|add|get|remove|...>   Configure and inspect MCP servers
   plugin <list|discover|import|...> Manage Atrium / Claude-Code-compatible plugins
   import [--all]                  Import plugins & skills discovered from Claude Code / Codex / Workspace
+  import sessions [--all]         Import conversations from Claude Code, Codex, DSH, Antigravity, Cursor, etc.
   policy <status|check|...>       Inspect/test/configure .atrium/policy.json security guardrails
   fleet <list|launch|diff|...>    Orchestrate parallel Git worktree tasks from the terminal
   doctor                          Check CLI installation, credentials, instructions, plugins, and Git
@@ -399,6 +412,8 @@ Options:
   --scene <scene>                 Work scene focus: code | work
   --effort <level>                Reasoning effort: auto | low | medium | high | xhigh | max
   --ultracode, --no-ultracode     Plan a multi-subagent workflow for each task (independent of effort)
+  --orchestrator, --no-orchestrator  Strong planner model directs a fast executor model (Plan → Execute → Review)
+  --executor-model <id>           Pin the fast executor model for Orchestrator (or use auto-selection)
   --output-format <fmt>           Print output format: text | json | stream-json
   --system-prompt <prompt>        Replace default system prompt
   --append-system-prompt <p>      Append instructions to the default system prompt
@@ -412,10 +427,10 @@ Options:
   -h, --help                      Show this help message
 
 Interactive Slash Commands & Composer Shortcuts:
-  /help /theme /login /logout /account /status /doctor /model /provider /effort /ultracode /mode
+  /help /theme /login /logout /account /status /doctor /model /provider /effort /ultracode /orchestrator /mode
   /scene /context /config /usage /thinking /new /resume /retry /fork /rename /compact
   /export /cwd /init /mcp /plugin /skills /memory /permissions /policy /diff /undo /rewind /git
-  /commit /fleet /preview /clear /exit
+  /commit /fleet /preview /import /clear /exit
   Shift+Tab (cycle mode)  Ctrl+O (thinking)  Ctrl+G (editor)  Ctrl+L (clear)  /  @file  !cmd
 `
 }

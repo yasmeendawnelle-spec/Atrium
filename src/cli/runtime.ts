@@ -10,6 +10,7 @@ import { MemoryStore } from '../core/memory.ts'
 import { configureNetwork } from '../core/net.ts'
 import { PluginManager } from '../core/plugins.ts'
 import { PreviewServerManager } from '../core/preview.ts'
+import { orchestratorDirective } from '../core/orchestrator.ts'
 import { systemPrompt, ultracodeDirective } from '../core/prompt.ts'
 import { bindSecrets } from '../core/secrets.ts'
 import { SettingsStore } from '../core/settings.ts'
@@ -19,6 +20,7 @@ import { invalidateWorkspaceFilesCache } from '../core/tools/files.ts'
 import { createGitWorktree, getGitChanges, getGitRepoStatus } from '../core/tools/git.ts'
 import { SkillsManager } from '../core/tools/skills.ts'
 import { newId } from '../core/store.ts'
+import { isLocalProviderUrl } from '../shared/orchestrator.ts'
 import type {
   AgentEvent,
   AgentMode,
@@ -154,9 +156,11 @@ export class CliRuntime {
 
     const customSystemPrompt: typeof systemPrompt = (ws, notes, spOpts) => {
       if (opts.systemPromptOverride?.trim()) {
-        const override = opts.systemPromptOverride.trim()
-        // Keep the Ultracode workflow rules even when the user replaces the base prompt.
-        return spOpts?.ultracode ? `${override}\n\n${ultracodeDirective(normalizeAgentMode(spOpts.mode, 'auto'))}` : override
+        const chunks = [opts.systemPromptOverride.trim()]
+        // Keep Orchestrator & Ultracode workflow rules even when the user replaces the base prompt.
+        if (spOpts?.orchestrator) chunks.push(orchestratorDirective({ ...spOpts.orchestrator, ultracode: spOpts.ultracode }))
+        if (spOpts?.ultracode) chunks.push(ultracodeDirective(normalizeAgentMode(spOpts.mode, 'auto')))
+        return chunks.join('\n\n')
       }
       const base = systemPrompt(ws, notes, spOpts)
       if (opts.appendSystemPrompt?.trim()) return `${base}\n\n${opts.appendSystemPrompt.trim()}`
@@ -178,6 +182,11 @@ export class CliRuntime {
       preview: this.previews,
       unattended: Boolean(opts.unattended) && !this.autoApproveFlag,
       ...(opts.maxRounds !== undefined ? { maxRounds: opts.maxRounds } : {}),
+      onBeforeModelCall: async (provider, model) => {
+        if (provider.managedBy === 'relaypulse') {
+          await this.account.ensureKeyGroupForModel(model).catch(() => undefined)
+        }
+      },
       emit: (ev) => this.handleAgentEvent(ev),
       save: async (conversation) => {
         if (!this.noPersistenceFlag) {
@@ -214,9 +223,12 @@ export class CliRuntime {
 
   private handleAgentEvent(ev: AgentEvent): void {
     if (ev.type === 'message_saved' && ev.message.role === 'assistant' && ev.message.usage) {
-      const provider = this.settings.activeProvider()
-      if (provider?.managedBy === 'relaypulse') {
-        void this.account.recordSubscriptionUsage(provider.model, ev.message.usage).catch(() => undefined)
+      const provider = ev.message.providerId
+        ? this.settings.getProvider(ev.message.providerId)
+        : this.settings.activeProvider()
+      const billedModel = ev.message.model ?? provider?.model
+      if (provider?.managedBy === 'relaypulse' && billedModel) {
+        void this.account.recordSubscriptionUsage(billedModel, ev.message.usage).catch(() => undefined)
       }
     }
 
@@ -287,6 +299,8 @@ export class CliRuntime {
     scene?: WorkScene
     effort?: ReasoningEffort
     ultracode?: boolean
+    orchestrator?: boolean
+    executorModel?: string
     workspace?: string
   }): Promise<void> {
     if (opts.workspace) {
@@ -297,12 +311,15 @@ export class CliRuntime {
       workScene?: WorkScene
       reasoningEffort?: ReasoningEffort
       ultracode?: boolean
+      orchestratorEnabled?: boolean
       workspace?: string
     } = {}
     if (opts.mode) patch.agentMode = opts.mode
     if (opts.scene) patch.workScene = opts.scene
     if (opts.effort) patch.reasoningEffort = opts.effort
     if (opts.ultracode !== undefined) patch.ultracode = opts.ultracode
+    if (opts.orchestrator !== undefined) patch.orchestratorEnabled = opts.orchestrator
+    else if (opts.executorModel !== undefined) patch.orchestratorEnabled = true
     if (opts.workspace) patch.workspace = this.workspace
     if (Object.keys(patch).length > 0) {
       await this.settings.update(patch)
@@ -316,6 +333,9 @@ export class CliRuntime {
     }
     if (opts.model) {
       await this.selectModel(opts.model, opts.provider)
+    }
+    if (opts.executorModel !== undefined) {
+      await this.selectExecutorModel(opts.executorModel)
     }
   }
 
@@ -334,7 +354,7 @@ export class CliRuntime {
     )
   }
 
-  async selectModel(queryOrId: string, preferredProvider?: string): Promise<{ provider: ProviderConfig; model: string }> {
+  resolveModelMatch(queryOrId: string, preferredProvider?: string): { provider: ProviderConfig; model: string } {
     const clean = queryOrId.trim()
     if (!clean) throw new Error('Model id cannot be empty.')
     const providers = this.settings.listProviders()
@@ -345,40 +365,72 @@ export class CliRuntime {
     const active = (preferredProvider ? this.findProvider(preferredProvider) : undefined) ?? this.settings.activeProvider()
     const orderedProviders = active ? [active, ...providers.filter((p) => p.id !== active.id)] : providers
 
-    // 1. Exact case-insensitive match across models
     for (const p of orderedProviders) {
       const list = p.models?.length ? p.models : [p.model]
       const exact = list.find((m) => m.toLowerCase() === clean.toLowerCase())
-      if (exact) {
-        await this.settings.selectProviderModel(p.id, exact)
-        if (p.managedBy === 'relaypulse') {
-          await this.account.ensureKeyGroupForModel(exact).catch(() => undefined)
-        }
-        return { provider: this.settings.getProvider(p.id) ?? p, model: exact }
-      }
+      if (exact) return { provider: p, model: exact }
     }
 
-    // 2. Partial match if not an exact ID
     const lower = clean.toLowerCase()
     for (const p of orderedProviders) {
       const list = p.models?.length ? p.models : [p.model]
       const partial = list.find((m) => m.toLowerCase().includes(lower))
-      if (partial) {
-        await this.settings.selectProviderModel(p.id, partial)
-        if (p.managedBy === 'relaypulse') {
-          await this.account.ensureKeyGroupForModel(partial).catch(() => undefined)
-        }
-        return { provider: this.settings.getProvider(p.id) ?? p, model: partial }
-      }
+      if (partial) return { provider: p, model: partial }
     }
 
-    // 3. Explicit override on active provider (e.g. custom model ID not in cached list)
     const fallbackProvider = active ?? providers[0]!
-    await this.settings.selectProviderModel(fallbackProvider.id, clean)
-    if (fallbackProvider.managedBy === 'relaypulse') {
-      await this.account.ensureKeyGroupForModel(clean).catch(() => undefined)
+    return { provider: fallbackProvider, model: clean }
+  }
+
+  async selectExecutorModel(
+    queryOrAuto: string,
+  ): Promise<{ mode: 'auto' } | { mode: 'pinned'; provider: ProviderConfig; model: string }> {
+    const clean = queryOrAuto.trim()
+    if (!clean || clean.toLowerCase() === 'auto') {
+      await this.settings.update({
+        orchestratorExecutorProviderId: '',
+        orchestratorExecutorModel: '',
+      })
+      return { mode: 'auto' }
     }
-    return { provider: this.settings.getProvider(fallbackProvider.id) ?? fallbackProvider, model: clean }
+    const usable = this.settings
+      .listProviders()
+      .filter((p) => p.hasKey || isLocalProviderUrl(p.baseUrl) || p.id === this.settings.activeProvider()?.id)
+    const lower = clean.toLowerCase()
+    let matched: { provider: ProviderConfig; model: string } | null = null
+    for (const p of usable) {
+      const list = p.models?.length ? p.models : [p.model]
+      const exact = list.find((m) => m.toLowerCase() === lower)
+      if (exact) {
+        matched = { provider: p, model: exact }
+        break
+      }
+    }
+    if (!matched) {
+      for (const p of usable) {
+        const list = p.models?.length ? p.models : [p.model]
+        const partial = list.find((m) => m.toLowerCase().includes(lower))
+        if (partial) {
+          matched = { provider: p, model: partial }
+          break
+        }
+      }
+    }
+    const target = matched ?? this.resolveModelMatch(clean)
+    await this.settings.update({
+      orchestratorExecutorProviderId: target.provider.id,
+      orchestratorExecutorModel: target.model,
+    })
+    return { mode: 'pinned', provider: target.provider, model: target.model }
+  }
+
+  async selectModel(queryOrId: string, preferredProvider?: string): Promise<{ provider: ProviderConfig; model: string }> {
+    const match = this.resolveModelMatch(queryOrId, preferredProvider)
+    await this.settings.selectProviderModel(match.provider.id, match.model)
+    if (match.provider.managedBy === 'relaypulse') {
+      await this.account.ensureKeyGroupForModel(match.model).catch(() => undefined)
+    }
+    return { provider: this.settings.getProvider(match.provider.id) ?? match.provider, model: match.model }
   }
 
   assertReady(): void {

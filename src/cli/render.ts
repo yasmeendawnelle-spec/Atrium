@@ -1,5 +1,6 @@
 // Terminal ANSI, live Markdown streaming, star spinner, Claude-Code tool tree, line-numbered diffs, and NDJSON renderer.
 import type { AgentEvent, TokenUsage, ToolCall } from '../shared/types.ts'
+import { getPlanStats } from '../shared/plan.ts'
 import { createMarkdownStream } from './markdown.ts'
 import {
   CLI_THEMES,
@@ -62,6 +63,10 @@ export function formatToolDisplayName(call: ToolCall, serverName?: string): stri
       return 'WebSearch'
     case 'web_fetch':
       return 'Fetch'
+    case 'exit_plan_mode':
+      return 'PlanHandoff'
+    case 'request_plan_review':
+      return 'PlanReview'
     default:
       return call.name
   }
@@ -70,6 +75,14 @@ export function formatToolDisplayName(call: ToolCall, serverName?: string): stri
 export function summarizeToolInput(call: ToolCall): string {
   const inp = call.input
   const firstKey =
+    (call.name === 'exit_plan_mode' &&
+      ((typeof inp.summary === 'string' && inp.summary) ||
+        (typeof inp.plan === 'string' &&
+          inp.plan
+            .split(/\r?\n/)
+            .map((l) => l.replace(/^#+\s*/, '').trim())
+            .find(Boolean)))) ||
+    (call.name === 'request_plan_review' && typeof inp.reason === 'string' && inp.reason) ||
     (typeof inp.path === 'string' && inp.path) ||
     (typeof inp.command === 'string' && inp.command) ||
     (typeof inp.query === 'string' && inp.query) ||
@@ -431,8 +444,7 @@ export function createRenderer(opts: CliRendererOptions = {}): CliRenderer {
           const detail = summarizeToolInput(event.call)
           const argsText = detail ? `${palette.muted('(')}${palette.cyan(detail)}${palette.muted(')')}` : ''
           stderr.write(`\n${palette.accent('●')} ${palette.bold(displayName)}${argsText}\n`)
-          spinner.start(`Running ${displayName}...`)
-          spinner.setMeta(`#${toolCallCount}`)
+          spinner.start(`Running ${displayName}...`, `#${toolCallCount}`)
           break
         }
 
@@ -473,6 +485,58 @@ export function createRenderer(opts: CliRendererOptions = {}): CliRenderer {
           stderr.write(
             `  ${palette.border('⎿')}  ${colorFn(`[hook:${event.pluginName}] ${event.event} → ${event.decision}${event.message ? `: ${event.message}` : ''}`)}\n`,
           )
+          break
+        }
+
+        case 'orchestrator_phase': {
+          spinner.stop()
+          closeThinking()
+          closeTextLine()
+          const phaseLabel =
+            event.phase === 'plan' ? 'Plan' : event.phase === 'execute' ? 'Execute' : 'Plan Review'
+          const phaseColor =
+            event.phase === 'execute' ? palette.green : event.phase === 'review' ? palette.yellow : palette.cyan
+          const reviewSuffix = event.phase === 'review' ? ` #${event.handoffCount}` : ''
+          const providerSuffix = event.providerName ? ` (${event.providerName})` : ''
+          stderr.write(
+            `  ${phaseColor('▸')} ${palette.bold(phaseColor(`${phaseLabel}${reviewSuffix}`))} ${palette.muted('·')} ${palette.cyan(event.model)}${palette.subtle(providerSuffix)}\n`,
+          )
+          const verb =
+            event.phase === 'plan' ? 'Planning' : event.phase === 'execute' ? 'Executing' : 'Reviewing'
+          spinner.start(`${verb} (${event.model})...`)
+          break
+        }
+
+        case 'plan_update': {
+          spinner.stop()
+          closeThinking()
+          closeTextLine()
+          if (!event.plan || event.plan.steps.length === 0) {
+            stderr.write(`  ${palette.muted('Plan cleared.')}\n`)
+            break
+          }
+          const stats = getPlanStats(event.plan)
+          const focusPart = event.plan.focus ? ` ${palette.muted('·')} ${palette.cyan(event.plan.focus)}` : ''
+          stderr.write(
+            `  ${palette.cyan('▸')} ${palette.bold(`Plan (${stats.done}/${stats.total})`)}${focusPart}\n`,
+          )
+          for (const step of event.plan.steps) {
+            const glyph =
+              step.status === 'done'
+                ? palette.green('✓')
+                : step.status === 'in_progress'
+                  ? palette.cyan('●')
+                  : step.status === 'failed'
+                    ? palette.red('✗')
+                    : step.status === 'skipped'
+                      ? palette.subtle('–')
+                      : palette.muted('○')
+            const label = step.status === 'done' || step.status === 'skipped' ? palette.muted(step.title) : step.title
+            stderr.write(`    ${glyph} ${label}\n`)
+          }
+          if (!stats.isAllDone) {
+            spinner.start(event.plan.focus ?? stats.activeStep?.title ?? 'Working...')
+          }
           break
         }
 

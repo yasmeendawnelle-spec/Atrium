@@ -188,6 +188,11 @@ Commands:
                 mode: settings.agentMode ?? 'auto',
                 scene: settings.workScene ?? 'code',
                 effort: settings.reasoningEffort ?? 'auto',
+                orchestrator: {
+                  enabled: settings.orchestratorEnabled === true,
+                  executorProviderId: settings.orchestratorExecutorProviderId ?? null,
+                  executorModel: settings.orchestratorExecutorModel ?? null,
+                },
                 mcp: mcpStatuses,
                 recentChats: chats.length,
               },
@@ -200,6 +205,10 @@ Commands:
         if (Boolean((stdout as NodeJS.WriteStream).isTTY)) {
           const p = createPalette(stdoutColor, savedTheme)
           const mcpConn = mcpStatuses.filter((m) => m.state === 'connected').length
+          const orchSummary =
+            settings.orchestratorEnabled === true
+              ? `on${settings.orchestratorExecutorModel ? ` (${settings.orchestratorExecutorModel})` : ' (auto)'}`
+              : 'off'
           const card = renderFramedCard({
             title: 'Atrium CLI Status',
             badge: `v${CLI_VERSION}`,
@@ -210,7 +219,7 @@ Commands:
               `${p.muted('Workspace:')}  ${runtime.workspace ?? p.subtle('(none)')}`,
               `${p.muted('Account:')}    ${account.connected ? p.green(account.email ?? account.displayName ?? 'connected') : p.subtle('not signed in')}`,
               `${p.muted('Provider:')}   ${provider ? `${p.bold(provider.name)} [${provider.protocol}] (${p.cyan(provider.model)})` : p.yellow('none')}`,
-              `${p.muted('Profile:')}    ${settings.agentMode ?? 'auto'} · ${settings.workScene ?? 'code'} · effort:${settings.reasoningEffort ?? 'auto'} · theme:${p.themeId}`,
+              `${p.muted('Profile:')}    ${settings.agentMode ?? 'auto'} · ${settings.workScene ?? 'code'} · effort:${settings.reasoningEffort ?? 'auto'} · orch:${orchSummary} · theme:${p.themeId}`,
               `${p.muted('MCP:')}        ${mcpConn}/${mcpStatuses.length} connected`,
               `${p.muted('Chats:')}      ${chats.length} saved`,
             ],
@@ -228,7 +237,7 @@ Commands:
           `Provider:  ${provider ? `${provider.name} [${provider.protocol}] (${provider.model})` : 'none'}\n`,
         )
         stdout.write(
-          `Profile:   ${settings.agentMode ?? 'auto'} · ${settings.workScene ?? 'code'} · effort:${settings.reasoningEffort ?? 'auto'}\n`,
+          `Profile:   ${settings.agentMode ?? 'auto'} · ${settings.workScene ?? 'code'} · effort:${settings.reasoningEffort ?? 'auto'} · orch:${settings.orchestratorEnabled === true ? (settings.orchestratorExecutorModel ?? 'auto') : 'off'}\n`,
         )
         stdout.write(`MCP:       ${mcpStatuses.filter((m) => m.state === 'connected').length}/${mcpStatuses.length} connected\n`)
         stdout.write(`Chats:     ${chats.length} saved\n`)
@@ -346,6 +355,8 @@ Commands:
           ...(args.scene !== undefined ? { scene: args.scene } : {}),
           ...(args.effort !== undefined ? { effort: args.effort } : {}),
           ...(args.ultracode !== undefined ? { ultracode: args.ultracode } : {}),
+          ...(args.orchestrator !== undefined ? { orchestrator: args.orchestrator } : {}),
+          ...(args.executorModel !== undefined ? { executorModel: args.executorModel } : {}),
           ...(args.workspace !== undefined ? { workspace: args.workspace } : {}),
         })
 

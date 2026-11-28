@@ -4,6 +4,7 @@ import { access, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fetchProviderModels, testConnection } from '../core/providers/index.ts'
+import { discoverExternalSessions, importExternalSessions } from '../core/sessionImport.ts'
 import {
   evaluateCommandPolicy,
   evaluateFileReadPolicy,
@@ -21,6 +22,7 @@ import {
   listGitBranches,
 } from '../core/tools/git.ts'
 import { PROVIDER_PRESETS, presetById } from '../shared/presets.ts'
+import { displayProviderName, normalizeOrchestratorMaxHandoffs, resolveOrchestratorExecutor } from '../shared/orchestrator.ts'
 import type {
   AgentMode,
   Conversation,
@@ -510,6 +512,72 @@ export async function handleUltracodeCommand(runtime: CliRuntime, arg: string, i
       `substantive tasks run as parallel subagent workflows (effort stays ${effort})`,
     )}\n  ${flow}\n`,
   )
+}
+
+/** Handles `/orchestrator [on|off|auto|subagents on|off|<model>]`; no argument prints status. */
+export async function handleOrchestratorCommand(runtime: CliRuntime, arg: string, io: CommandIo): Promise<void> {
+  const p = io.palette
+  const raw = arg.trim()
+  const lower = raw.toLowerCase()
+  const active = runtime.settings.activeProvider()
+  const providers = runtime.settings.listProviders()
+
+  const printStatus = () => {
+    const cfg = runtime.settings.get()
+    const on = cfg.orchestratorEnabled === true
+    const resolved = active ? resolveOrchestratorExecutor(providers, active, cfg) : null
+    const maxHandoffs = normalizeOrchestratorMaxHandoffs(cfg.orchestratorMaxHandoffs)
+    const subagents = cfg.orchestratorSubagentsUseExecutor !== false
+    io.stdout.write(
+      `Orchestrator: ${on ? p.green('on') : p.muted('off')}${active ? `  ${p.muted('·')}  Planner: ${p.bold(active.model)} (${displayProviderName(active)})` : ''}\n`,
+    )
+    if (resolved) {
+      const execLabel = resolved.source === 'pinned' ? 'pinned' : resolved.isSameAsPlanner ? 'fallback' : 'auto'
+      io.stdout.write(
+        `  Executor (${execLabel}): ${p.cyan(resolved.model)} (${displayProviderName(resolved.provider)})  ·  subagents=${subagents ? 'fast' : 'planner'}  ·  max-handoffs=${maxHandoffs}\n`,
+      )
+    }
+    io.stdout.write(
+      `  ${p.subtle('Usage: /orchestrator [on|off|auto|<fast-model>|subagents on|off]')}\n`,
+    )
+  }
+
+  if (!raw) {
+    printStatus()
+    return
+  }
+
+  if (lower === 'on' || lower === 'true' || lower === '1' || lower === 'off' || lower === 'false' || lower === '0' || lower === 'toggle') {
+    const cur = runtime.settings.get().orchestratorEnabled === true
+    const next = lower === 'toggle' ? !cur : lower === 'on' || lower === 'true' || lower === '1'
+    await runtime.settings.update({ orchestratorEnabled: next })
+    printStatus()
+    return
+  }
+
+  if (lower === 'auto') {
+    await runtime.selectExecutorModel('auto')
+    if (runtime.settings.get().orchestratorEnabled !== true) {
+      await runtime.settings.update({ orchestratorEnabled: true })
+    }
+    printStatus()
+    return
+  }
+
+  if (lower === 'subagents on' || lower === 'subagents off') {
+    await runtime.settings.update({ orchestratorSubagentsUseExecutor: lower.endsWith('on') })
+    printStatus()
+    return
+  }
+
+  const picked = await runtime.selectExecutorModel(raw)
+  await runtime.settings.update({ orchestratorEnabled: true })
+  if (picked.mode === 'pinned') {
+    io.stdout.write(
+      `Orchestrator ${p.green('on')} · Executor pinned to ${p.cyan(picked.model)} (${displayProviderName(picked.provider)}).\n`,
+    )
+  }
+  printStatus()
 }
 
 /** A short shine across `✦ ULTRACODE ON` (about 0.7 s) before the final line is printed in its place. */
@@ -1907,17 +1975,109 @@ Commands:
   return 2
 }
 
-/** Handles `atrium import [--all] [--source claude-code|codex|antigravity|workspace]`. */
+/** Handles `atrium import [sessions] [--all] [--source ...] [--path <folder>]`. */
 export async function runImportSubcommand(
   runtime: CliRuntime,
   subArgs: readonly string[],
   json: boolean,
   stdout: NodeJS.WritableStream,
 ): Promise<number> {
+  if (subArgs[0]?.toLowerCase() === 'sessions') {
+    const rest = subArgs.slice(1)
+    if (rest.includes('--help') || rest.includes('-h')) {
+      stdout.write(`Usage: atrium import sessions [--source <agent>] [--path <folder>] [--all] [--limit <n>] [--overwrite] [--json]
+
+Scans local AI agent sessions (Claude Code, Codex, DSH, Antigravity, Cursor, Gemini CLI, Cline, OpenCode, Aider)
+or any custom folder and imports conversations into Atrium.
+`)
+      return 0
+    }
+
+    const all = rest.includes('--all')
+    const overwrite = rest.includes('--overwrite')
+    let sourceFilter: string | undefined
+    let folderPath: string | undefined
+    let limit: number | undefined
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === '--source' && rest[i + 1]) {
+        sourceFilter = rest[++i]!.toLowerCase()
+      } else if ((rest[i] === '--path' || rest[i] === '--dir') && rest[i + 1]) {
+        folderPath = resolve(rest[++i]!)
+      } else if (rest[i] === '--limit' && rest[i + 1]) {
+        const parsed = Number.parseInt(rest[++i]!, 10)
+        if (Number.isFinite(parsed) && parsed > 0) limit = parsed
+      }
+    }
+
+    const scan = await discoverExternalSessions({
+      chats: runtime.chats,
+      workspace: runtime.workspace,
+      recentWorkspaces: runtime.settings.get().recentWorkspaces,
+      folderPath,
+    })
+    let filtered = scan.sessions.filter((s) => !sourceFilter || s.source.toLowerCase() === sourceFilter)
+    if (limit) filtered = filtered.slice(0, limit)
+
+    if (!all) {
+      if (json) {
+        stdout.write(`${JSON.stringify({ ...scan, sessions: filtered }, null, 2)}\n`)
+        return 0
+      }
+      if (filtered.length === 0) {
+        stdout.write('No external agent sessions discovered.\n')
+        return 0
+      }
+      stdout.write(`Discovered ${filtered.length} external session(s):\n`)
+      for (const s of filtered) {
+        const status = s.alreadyImported ? 'already imported' : 'ready'
+        const wsNote = s.workspace ? ` · ${s.workspace}` : ''
+        stdout.write(`  - [${s.sourceLabel}] ${s.title} (${s.turnCount} turns, ${status})${wsNote}\n`)
+      }
+      stdout.write('\nRun "atrium import sessions --all" to import available sessions into Atrium.\n')
+      return 0
+    }
+
+    const candidates = filtered.filter((s) => overwrite || !s.alreadyImported)
+    if (candidates.length === 0) {
+      stdout.write(
+        json
+          ? `${JSON.stringify({ imported: [], skipped: [], warnings: scan.warnings })}\n`
+          : 'All discovered sessions are already imported.\n',
+      )
+      return 0
+    }
+
+    const res = await importExternalSessions({
+      chats: runtime.chats,
+      settings: runtime.settings,
+      items: candidates.map((s) => ({
+        key: s.key,
+        source: s.source,
+        externalId: s.externalId,
+        sourcePath: s.sourcePath,
+      })),
+      overwriteExisting: overwrite,
+    })
+
+    if (json) {
+      stdout.write(`${JSON.stringify(res, null, 2)}\n`)
+      return 0
+    }
+    stdout.write(`Imported ${res.imported.length} session(s) (${res.skipped.length} skipped).\n`)
+    for (const c of res.imported.slice(0, 10)) {
+      stdout.write(`  - ${c.id}: ${c.title}\n`)
+    }
+    if (res.imported.length > 0) {
+      stdout.write(`\nRun "atrium -r ${res.imported[0]!.id}" to resume directly.\n`)
+    }
+    return 0
+  }
+
   if (subArgs.includes('--help') || subArgs.includes('-h')) {
     stdout.write(`Usage: atrium import [--all] [--source <claude-code|codex|antigravity|workspace>]
+       atrium import sessions [--source <agent>] [--path <folder>] [--all] [--limit <n>] [--json]
 
-Scans local external AI agent plugins/skills and optionally imports them into Atrium.
+Scans local external AI agent plugins/skills or conversation histories and imports them into Atrium.
 `)
     return 0
   }
@@ -2465,6 +2625,144 @@ export async function runFleetSubcommand(
     interactive: false,
     io,
   })
+}
+
+/** Handles `/import [sessions|all|<folder>] [--source <agent>]` in the interactive CLI REPL. */
+export async function handleImportSessionsCommand(
+  runtime: CliRuntime,
+  arg: string,
+  io: CommandIo,
+  onSwitchChat?: (conv: Conversation) => Promise<void> | void,
+): Promise<void> {
+  const { stdin, stdout, palette, isTty } = io
+  const tokens = splitCliTokens(arg)
+  let importAll = false
+  let sourceFilter: string | undefined
+  let folderPath: string | undefined
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i]!
+    const lower = tok.toLowerCase()
+    if (lower === 'help' || lower === '--help' || lower === '-h') {
+      stdout.write(`Usage:
+  /import                   Scan local agent sessions and pick one (or all) to import
+  /import all               Import all unimported local agent sessions
+  /import <folder>          Scan a custom folder for external agent sessions
+  /import --source <agent>  Filter by agent (claude-code, codex, dsh, antigravity, cursor, ...)
+`)
+      return
+    }
+    if (lower === 'all' || lower === '--all') {
+      importAll = true
+    } else if (lower === '--source' && tokens[i + 1]) {
+      sourceFilter = tokens[++i]!.toLowerCase()
+    } else if (lower !== 'sessions') {
+      folderPath = resolve(tok)
+    }
+  }
+
+  const scan = await discoverExternalSessions({
+    chats: runtime.chats,
+    workspace: runtime.workspace,
+    recentWorkspaces: runtime.settings.get().recentWorkspaces,
+    folderPath,
+  })
+  const sessions = scan.sessions.filter((s) => !sourceFilter || s.source.toLowerCase() === sourceFilter)
+  if (sessions.length === 0) {
+    stdout.write(palette.muted('No external agent sessions discovered.\n'))
+    return
+  }
+
+  if (importAll || !isTty) {
+    const targets = sessions.filter((s) => !s.alreadyImported)
+    if (!importAll && !isTty) {
+      stdout.write(`Discovered ${sessions.length} session(s) (${targets.length} unimported). Use "/import all" to import.\n`)
+      return
+    }
+    if (targets.length === 0) {
+      stdout.write(palette.muted('All discovered sessions are already imported.\n'))
+      return
+    }
+    const res = await importExternalSessions({
+      chats: runtime.chats,
+      settings: runtime.settings,
+      items: targets.map((s) => ({
+        key: s.key,
+        source: s.source,
+        externalId: s.externalId,
+        sourcePath: s.sourcePath,
+      })),
+    })
+    stdout.write(palette.green(`Imported ${res.imported.length} session(s) into Atrium.\n`))
+    if (res.imported.length === 1 && onSwitchChat) {
+      const conv = await runtime.chats.get(res.imported[0]!.id)
+      if (conv) await onSwitchChat(conv)
+    }
+    return
+  }
+
+  type Pick =
+    | { kind: 'all' }
+    | { kind: 'open'; chatId: string }
+    | { kind: 'one'; session: (typeof sessions)[number] }
+
+  const unimported = sessions.filter((s) => !s.alreadyImported)
+  const options: Array<SelectOption<Pick>> = []
+  if (unimported.length > 1) {
+    options.push({
+      value: { kind: 'all' },
+      label: `Import all ${unimported.length} new session(s)`,
+      hint: 'Migrate everything not yet in Atrium',
+    })
+  }
+  for (const s of sessions.slice(0, 60)) {
+    const wsNote = s.workspace ? ` · ${s.workspace}` : ''
+    options.push({
+      value: s.alreadyImported && s.importedChatId ? { kind: 'open', chatId: s.importedChatId } : { kind: 'one', session: s },
+      label: `[${s.sourceLabel}] ${s.title}`,
+      hint: `${s.turnCount}t${wsNote}${s.alreadyImported ? ' · imported (open)' : ''}`,
+    })
+  }
+
+  const picked = await selectOption<Pick>({
+    title: 'Import external agent session',
+    searchable: true,
+    options,
+    pageSize: 12,
+    palette,
+    stdin,
+    stdout,
+  })
+  if (!picked) return
+
+  if (picked.kind === 'open') {
+    const conv = await runtime.chats.get(picked.chatId)
+    if (conv && onSwitchChat) {
+      await onSwitchChat(conv)
+      stdout.write(palette.green(`Switched to imported chat "${conv.title}".\n`))
+    }
+    return
+  }
+
+  const targets = picked.kind === 'all' ? unimported : [picked.session]
+  const res = await importExternalSessions({
+    chats: runtime.chats,
+    settings: runtime.settings,
+    items: targets.map((s) => ({
+      key: s.key,
+      source: s.source,
+      externalId: s.externalId,
+      sourcePath: s.sourcePath,
+    })),
+  })
+  stdout.write(palette.green(`Imported ${res.imported.length} session(s).\n`))
+  if (res.imported.length === 1 && onSwitchChat) {
+    const conv = await runtime.chats.get(res.imported[0]!.id)
+    if (conv) {
+      await onSwitchChat(conv)
+      stdout.write(palette.muted(`Switched to "${conv.title}".\n`))
+    }
+  }
 }
 
 export async function handlePreviewCommand(
