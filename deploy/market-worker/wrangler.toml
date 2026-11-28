@@ -1,0 +1,21 @@
+name = "atrium-market"
+main = "src/index.js"
+compatibility_date = "2025-12-01"
+workers_dev = true
+
+routes = [
+  { pattern = "market.rpulse.top", custom_domain = true }
+]
+
+[vars]
+AUTH_ORIGIN = "https://api.rpulse.top"
+GITHUB_REPO = "yasmeendawnelle-spec/Atrium"
+# Comma-separated lowercase email whitelist (always recognized as Official Co-contributor + Reviewer in addition to live GitHub contributors).
+COCONTRIBUTOR_EMAILS = "smile952921@gmail.com,1802691842@qq.com"
+COCONTRIBUTOR_GITHUB_LOGINS = ""
+# Optional additional reviewer emails (can approve/reject community submissions).
+REVIEWER_EMAILS = ""
+
+[[kv_namespaces]]
+binding = "ATRIUM_MARKET_KV"
+id = "52f3b9f997f6447db5b420fbd32a68a7"

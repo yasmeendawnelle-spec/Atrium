@@ -7,6 +7,7 @@ import { call, errorMessage } from '../lib/api.ts'
 import { closePolicyModal, toast, useStore } from '../lib/store.ts'
 import { useFeatureText } from '../locales/features.ts'
 import { folderName } from './WorkspacePicker.tsx'
+import { StudioSelect, type StudioSelectOption } from './StudioSelect.tsx'
 
 interface PolicyFormState {
   protectMode: 'inherit' | 'on' | 'off'
@@ -108,7 +109,7 @@ export function PolicyModal() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault()
         closePolicyModal()
       }
@@ -148,6 +149,37 @@ export function PolicyModal() {
       toast(errorMessage(err), 'error')
     }
   }
+
+  const protectOptions: StudioSelectOption<PolicyFormState['protectMode']>[] = [
+    {
+      value: 'inherit',
+      label: ft('policy.protectInherit', {
+        state: (inspection?.protectSensitiveFiles ?? true) ? ft('policy.enabledText') : ft('policy.disabledText'),
+      }),
+    },
+    { value: 'on', label: ft('policy.protectOn') },
+    { value: 'off', label: ft('policy.protectOff') },
+  ]
+
+  const sandboxOptions: StudioSelectOption<PolicyFormState['sandboxMode']>[] = [
+    { value: '', label: ft('policy.sandboxInherit') },
+    { value: 'off', label: ft('policy.sandboxOff') },
+    { value: 'workspace_write', label: ft('policy.sandboxWorkspace') },
+    { value: 'read_only', label: ft('policy.sandboxReadOnly') },
+  ]
+
+  const networkOptions: StudioSelectOption<PolicyFormState['allowNetwork']>[] = [
+    { value: 'inherit', label: ft('policy.networkInherit') },
+    { value: 'allow', label: ft('policy.networkAllow') },
+    { value: 'deny', label: ft('policy.networkDeny') },
+  ]
+
+  const denyReadCount = fromLines(form.denyReadText).length
+  const allowReadCount = fromLines(form.allowReadText).length
+  const denyWriteCount = fromLines(form.denyWriteText).length
+  const allowWriteCount = fromLines(form.allowWriteText).length
+  const denyCmdCount = fromLines(form.denyCommandsText).length
+  const allowCmdCount = fromLines(form.allowCommandsText).length
 
   return createPortal(
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && closePolicyModal()}>
@@ -223,7 +255,7 @@ export function PolicyModal() {
                 <div className="policy-defaults-box">
                   <button
                     type="button"
-                    className="browser-refs-head"
+                    className="policy-defaults-toggle"
                     onClick={() => setShowDefaults((v) => !v)}
                     aria-expanded={showDefaults}
                   >
@@ -256,58 +288,53 @@ export function PolicyModal() {
                 </div>
               )}
 
-              <div className="policy-fields-grid">
+              <div className="policy-controls-grid">
                 <div className="policy-field">
-                  <label htmlFor="policy-protect-mode">{ft('policy.protectDefaultLabel')}</label>
-                  <select
-                    id="policy-protect-mode"
-                    className="policy-select"
+                  <label>{ft('policy.protectDefaultLabel')}</label>
+                  <StudioSelect
                     value={form.protectMode}
-                    onChange={(e) => setForm((f) => ({ ...f, protectMode: e.target.value as PolicyFormState['protectMode'] }))}
-                  >
-                    <option value="inherit">
-                      {ft('policy.protectInherit', {
-                        state: (inspection?.protectSensitiveFiles ?? true) ? ft('policy.enabledText') : ft('policy.disabledText'),
-                      })}
-                    </option>
-                    <option value="on">{ft('policy.protectOn')}</option>
-                    <option value="off">{ft('policy.protectOff')}</option>
-                  </select>
+                    options={protectOptions}
+                    fullWidth
+                    minMenuWidth={220}
+                    ariaLabel={ft('policy.protectDefaultLabel')}
+                    onChange={(v) => setForm((f) => ({ ...f, protectMode: v }))}
+                  />
                 </div>
 
                 <div className="policy-field">
-                  <label htmlFor="policy-sandbox">{ft('policy.sandboxFloor')}</label>
-                  <select
-                    id="policy-sandbox"
-                    className="policy-select"
+                  <label>{ft('policy.sandboxFloor')}</label>
+                  <StudioSelect
                     value={form.sandboxMode}
-                    onChange={(e) => setForm((f) => ({ ...f, sandboxMode: e.target.value as PolicyFormState['sandboxMode'] }))}
-                  >
-                    <option value="">{ft('policy.sandboxInherit')}</option>
-                    <option value="off">{ft('policy.sandboxOff')}</option>
-                    <option value="workspace_write">{ft('policy.sandboxWorkspace')}</option>
-                    <option value="read_only">{ft('policy.sandboxReadOnly')}</option>
-                  </select>
+                    options={sandboxOptions}
+                    fullWidth
+                    minMenuWidth={220}
+                    ariaLabel={ft('policy.sandboxFloor')}
+                    onChange={(v) => setForm((f) => ({ ...f, sandboxMode: v }))}
+                  />
                 </div>
 
                 <div className="policy-field">
-                  <label htmlFor="policy-network">{ft('policy.networkAccess')}</label>
-                  <select
-                    id="policy-network"
-                    className="policy-select"
+                  <label>{ft('policy.networkAccess')}</label>
+                  <StudioSelect
                     value={form.allowNetwork}
-                    onChange={(e) => setForm((f) => ({ ...f, allowNetwork: e.target.value as PolicyFormState['allowNetwork'] }))}
-                  >
-                    <option value="inherit">{ft('policy.networkInherit')}</option>
-                    <option value="allow">{ft('policy.networkAllow')}</option>
-                    <option value="deny">{ft('policy.networkDeny')}</option>
-                  </select>
+                    options={networkOptions}
+                    fullWidth
+                    minMenuWidth={220}
+                    ariaLabel={ft('policy.networkAccess')}
+                    onChange={(v) => setForm((f) => ({ ...f, allowNetwork: v }))}
+                  />
                 </div>
               </div>
 
               <div className="policy-fields-grid">
                 <div className="policy-field">
-                  <label htmlFor="policy-deny-read">{ft('policy.denyRead')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-deny-read" className="policy-field-title">
+                      <span className="policy-rule-dot deny" aria-hidden />
+                      <span>{ft('policy.denyRead')}</span>
+                    </label>
+                    {denyReadCount > 0 && <span className="policy-rule-count">{denyReadCount}</span>}
+                  </div>
                   <textarea
                     id="policy-deny-read"
                     className="policy-textarea"
@@ -317,7 +344,13 @@ export function PolicyModal() {
                   />
                 </div>
                 <div className="policy-field">
-                  <label htmlFor="policy-allow-read">{ft('policy.allowRead')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-allow-read" className="policy-field-title">
+                      <span className="policy-rule-dot allow" aria-hidden />
+                      <span>{ft('policy.allowRead')}</span>
+                    </label>
+                    {allowReadCount > 0 && <span className="policy-rule-count">{allowReadCount}</span>}
+                  </div>
                   <textarea
                     id="policy-allow-read"
                     className="policy-textarea"
@@ -327,7 +360,13 @@ export function PolicyModal() {
                   />
                 </div>
                 <div className="policy-field">
-                  <label htmlFor="policy-deny-write">{ft('policy.denyWrite')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-deny-write" className="policy-field-title">
+                      <span className="policy-rule-dot deny" aria-hidden />
+                      <span>{ft('policy.denyWrite')}</span>
+                    </label>
+                    {denyWriteCount > 0 && <span className="policy-rule-count">{denyWriteCount}</span>}
+                  </div>
                   <textarea
                     id="policy-deny-write"
                     className="policy-textarea"
@@ -337,7 +376,13 @@ export function PolicyModal() {
                   />
                 </div>
                 <div className="policy-field">
-                  <label htmlFor="policy-allow-write">{ft('policy.allowWrite')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-allow-write" className="policy-field-title">
+                      <span className="policy-rule-dot allow" aria-hidden />
+                      <span>{ft('policy.allowWrite')}</span>
+                    </label>
+                    {allowWriteCount > 0 && <span className="policy-rule-count">{allowWriteCount}</span>}
+                  </div>
                   <textarea
                     id="policy-allow-write"
                     className="policy-textarea"
@@ -346,7 +391,13 @@ export function PolicyModal() {
                   />
                 </div>
                 <div className="policy-field">
-                  <label htmlFor="policy-deny-cmd">{ft('policy.denyCommands')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-deny-cmd" className="policy-field-title">
+                      <span className="policy-rule-dot deny" aria-hidden />
+                      <span>{ft('policy.denyCommands')}</span>
+                    </label>
+                    {denyCmdCount > 0 && <span className="policy-rule-count">{denyCmdCount}</span>}
+                  </div>
                   <textarea
                     id="policy-deny-cmd"
                     className="policy-textarea"
@@ -356,7 +407,13 @@ export function PolicyModal() {
                   />
                 </div>
                 <div className="policy-field">
-                  <label htmlFor="policy-allow-cmd">{ft('policy.allowCommands')}</label>
+                  <div className="policy-field-head">
+                    <label htmlFor="policy-allow-cmd" className="policy-field-title">
+                      <span className="policy-rule-dot allow" aria-hidden />
+                      <span>{ft('policy.allowCommands')}</span>
+                    </label>
+                    {allowCmdCount > 0 && <span className="policy-rule-count">{allowCmdCount}</span>}
+                  </div>
                   <textarea
                     id="policy-allow-cmd"
                     className="policy-textarea"
@@ -372,9 +429,15 @@ export function PolicyModal() {
                 </div>
                 <div className="policy-tester-row">
                   <input
-                    className="fleet-input"
+                    className="fleet-input policy-tester-input"
                     value={testPath}
                     onChange={(e) => setTestPath(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void runCheckPath('read')
+                      }
+                    }}
                     placeholder={ft('policy.testerPlaceholder')}
                   />
                   <button type="button" className="btn btn-small" onClick={() => void runCheckPath('read')}>
@@ -400,7 +463,7 @@ export function PolicyModal() {
               </div>
 
               <div className="fleet-launcher-foot">
-                <span className="muted small">
+                <span className="muted small policy-foot-path" title={scope === 'local' ? inspection?.localFile.path : inspection?.projectFile.path}>
                   {scope === 'local' ? inspection?.localFile.path : inspection?.projectFile.path}
                 </span>
                 <button
