@@ -6,7 +6,7 @@ import type { ImageAttachment } from '@shared/types.ts'
 import { applyLocale } from '../i18n.ts'
 import { call, errorMessage, shell } from '../lib/api.ts'
 import { fileToImageAttachment } from '../lib/images.ts'
-import { handleCoreEvent, liveFor, loadAll, setState, streamFor, toast, useStore } from '../lib/store.ts'
+import { handleCoreEvent, liveFor, loadAll, setState, toast, useChatStream, useStore } from '../lib/store.ts'
 import { useVoiceDictation } from '../lib/useVoiceDictation.ts'
 import { Oculus } from './Oculus.tsx'
 import { folderName } from './WorkspacePicker.tsx'
@@ -26,7 +26,7 @@ export function QuickEntryWindow() {
 
   const conv = useStore((s) => (chatId ? s.conversations[chatId] : undefined))
   const live = useStore((s) => liveFor(s, chatId))
-  const stream = useStore((s) => streamFor(s, chatId))
+  const stream = useChatStream(chatId)
 
   const voice = useVoiceDictation((spoken) => {
     setText((prev) => (prev.trim() ? `${prev.trimEnd()} ${spoken}` : spoken))

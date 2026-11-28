@@ -1,8 +1,33 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
-import { BookOpen, Bot, Check, ChevronRight, Copy, ExternalLink, FileText, Globe, Monitor, MousePointer2, Terminal, Wrench } from 'lucide-react'
+import {
+  ArrowRightLeft,
+  BookOpen,
+  Bot,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  CircleDot,
+  Copy,
+  ExternalLink,
+  FileText,
+  Globe,
+  ListChecks,
+  Loader2,
+  MinusCircle,
+  Monitor,
+  MousePointer2,
+  RotateCcw,
+  Terminal,
+  Wrench,
+  XCircle,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ImageAttachment, ToolCall, ToolRunStatus } from '@shared/types.ts'
+import { getPlanStats, parsePlanInput, UPDATE_PLAN_TOOL_NAME } from '@shared/plan.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { requestOpenBrowserDrawer, useStore } from '../lib/store.ts'
+import { Markdown } from './Markdown.tsx'
 
 const ANSI_FG_COLORS: Record<number, string> = {
   30: '#6e7681',
@@ -149,6 +174,28 @@ function summaryOf(call: ToolCall): string {
     const files = [...text.matchAll(/^(?:\*\*\* (?:Add|Update|Delete) File:|\+\+\+ b\/)(.+)$/gm)].map((m) => m[1]!.trim())
     return files.slice(0, 2).join(', ') + (files.length > 2 ? ` +${files.length - 2}` : '')
   }
+  if (call.name === 'exit_plan_mode') {
+    const sum = typeof input.summary === 'string' ? input.summary.trim() : ''
+    if (sum) return sum.slice(0, 80)
+    const planText = typeof input.plan === 'string' ? input.plan : ''
+    const firstLine = planText
+      .split(/\r?\n/)
+      .map((l) => l.replace(/^#+\s*/, '').trim())
+      .find(Boolean)
+    return firstLine ? firstLine.slice(0, 80) : ''
+  }
+  if (call.name === 'request_plan_review') {
+    const reason = typeof input.reason === 'string' ? input.reason.replace(/\s+/g, ' ').trim() : ''
+    return reason.slice(0, 80)
+  }
+  if (call.name === UPDATE_PLAN_TOOL_NAME) {
+    const parsed = parsePlanInput(input, 0)
+    if (!parsed.ok) return ''
+    if (!parsed.plan) return 'cleared'
+    const stats = getPlanStats(parsed.plan)
+    const detail = parsed.plan.focus || stats.activeStep?.title || parsed.plan.explanation || ''
+    return detail ? `${stats.done}/${stats.total} · ${detail.slice(0, 72)}` : `${stats.done}/${stats.total}`
+  }
   if (typeof input.path === 'string') return input.path
   if (typeof input.query === 'string') return input.query
   const first = Object.values(input).find((v) => typeof v === 'string')
@@ -171,15 +218,34 @@ export function ToolRow({
   defaultOpen?: boolean
 }) {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const [open, setOpen] = useState(Boolean(defaultOpen))
   useEffect(() => {
     if (defaultOpen !== undefined) setOpen(defaultOpen)
   }, [defaultOpen])
   const [copiedOut, setCopiedOut] = useState(false)
+  const [copiedPlan, setCopiedPlan] = useState(false)
   const { serverId, tool } = splitToolName(call.name)
   const serverName = useStore((s) => (serverId ? s.servers.find((c) => c.id === serverId)?.name : undefined))
+  const isHandoffTool = call.name === 'exit_plan_mode' || call.name === 'request_plan_review'
+  const isPlanTool = call.name === UPDATE_PLAN_TOOL_NAME
+  const parsedPlan = isPlanTool ? parsePlanInput(call.input ?? {}, 0) : null
+  const displayToolName =
+    call.name === 'exit_plan_mode'
+      ? ft('orchestrator.tool.handoff')
+      : call.name === 'request_plan_review'
+        ? ft('orchestrator.tool.review')
+        : isPlanTool
+          ? ft('plan.toolName')
+          : tool
   const Icon =
-    call.name === 'run_command'
+    call.name === 'exit_plan_mode'
+      ? ArrowRightLeft
+      : call.name === 'request_plan_review'
+        ? RotateCcw
+        : isPlanTool
+          ? ListChecks
+          : call.name === 'run_command'
       ? Terminal
       : call.name === 'load_skill'
         ? BookOpen
@@ -196,6 +262,12 @@ export function ToolRow({
   // File bodies read better as text than as one escaped JSON string.
   const { content, ...rest } = call.input ?? {}
   const body = typeof content === 'string' ? content : undefined
+  const handoffPlanText = call.name === 'exit_plan_mode' && typeof call.input?.plan === 'string' ? call.input.plan.trim() : undefined
+  const reviewReason =
+    call.name === 'request_plan_review' && typeof call.input?.reason === 'string' ? call.input.reason.trim() : undefined
+  const reviewReport =
+    call.name === 'request_plan_review' && typeof call.input?.report === 'string' ? call.input.report.trim() : undefined
+  const handoffCopySource = handoffPlanText ?? ([reviewReason, reviewReport].filter(Boolean).join('\n\n') || undefined)
 
   const copyOutput = () => {
     if (output === undefined) return
@@ -205,15 +277,23 @@ export function ToolRow({
     })
   }
 
+  const copyPlan = () => {
+    if (!handoffCopySource) return
+    void navigator.clipboard.writeText(handoffCopySource).then(() => {
+      setCopiedPlan(true)
+      setTimeout(() => setCopiedPlan(false), 1800)
+    })
+  }
+
   const isBrowserTool = BROWSER_TOOLS.has(call.name)
   const previewShot = isBrowserTool && images?.length ? images[0] : undefined
 
   return (
-    <div className={`tool-row tool-${status}`}>
+    <div className={`tool-row tool-${status}${isHandoffTool ? ' tool-row-handoff' : ''}`}>
       <button type="button" className="tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
         <ChevronRight size={14} className={`chev${open ? ' open' : ''}`} />
         <Icon size={14} />
-        <span className="tool-name">{tool}</span>
+        <span className="tool-name">{displayToolName}</span>
         {serverName && <span className="tool-server">{serverName}</span>}
         {summary && <code className="tool-summary">{summary}</code>}
         {status === 'done' ? (
@@ -257,10 +337,78 @@ export function ToolRow({
       <div className={`tool-expand${open ? ' open' : ''}`} aria-hidden={!open}>
         <div className="tool-expand-inner">
           <div className="tool-body">
-            <div className="tool-label">{t('chat.input')}</div>
-            <pre>{JSON.stringify(body === undefined ? call.input : rest, null, 2)}</pre>
-            {body !== undefined && <pre className="tool-content">{body}</pre>}
-            {output !== undefined && (
+            {isHandoffTool && (handoffPlanText || reviewReason || reviewReport) ? (
+              <div className="tool-handoff-content">
+                <div className="tool-handoff-bar">
+                  <span className="tool-label">{displayToolName}</span>
+                  {handoffCopySource && (
+                    <button type="button" className="copy-mini" onClick={copyPlan}>
+                      {copiedPlan ? <Check size={11} /> : <Copy size={11} />}
+                      <span>{copiedPlan ? t('common.copied') : ft('orchestrator.copyPlan')}</span>
+                    </button>
+                  )}
+                </div>
+                {reviewReason && (
+                  <div className="tool-handoff-reason">
+                    <strong>{ft('orchestrator.reasonLabel')}:</strong>
+                    <span>{reviewReason}</span>
+                  </div>
+                )}
+                {(handoffPlanText || reviewReport) && (
+                  <div className="tool-handoff-md">
+                    <Markdown text={handoffPlanText ?? reviewReport ?? ''} />
+                  </div>
+                )}
+              </div>
+            ) : isPlanTool && status !== 'error' && parsedPlan?.ok ? (
+              <div className="tool-plan-preview">
+                {!parsedPlan.plan ? (
+                  <div className="tool-plan-empty">{ft('plan.cleared')}</div>
+                ) : (
+                  <>
+                    <div className="tool-plan-head">
+                      <span className="tool-label">
+                        {ft('plan.title')} · {getPlanStats(parsedPlan.plan).done}/{parsedPlan.plan.steps.length}
+                      </span>
+                      {parsedPlan.plan.focus && <span className="tool-plan-focus">{parsedPlan.plan.focus}</span>}
+                    </div>
+                    {parsedPlan.plan.explanation && (
+                      <div className="tool-plan-note">{parsedPlan.plan.explanation}</div>
+                    )}
+                    <ol className="plan-steps tool-plan-steps">
+                      {parsedPlan.plan.steps.map((step, i) => (
+                        <li key={`${i}-${step.title}`} className={`plan-step is-${step.status}`}>
+                          {step.status === 'done' ? (
+                            <CheckCircle2 size={13} className="plan-step-icon is-done" />
+                          ) : step.status === 'in_progress' ? (
+                            status === 'running' ? (
+                              <Loader2 size={13} className="plan-step-icon is-running plan-spin" />
+                            ) : (
+                              <CircleDot size={13} className="plan-step-icon is-paused" />
+                            )
+                          ) : step.status === 'failed' ? (
+                            <XCircle size={13} className="plan-step-icon is-failed" />
+                          ) : step.status === 'skipped' ? (
+                            <MinusCircle size={13} className="plan-step-icon is-skipped" />
+                          ) : (
+                            <Circle size={13} className="plan-step-icon is-pending" />
+                          )}
+                          <span className="plan-step-index">{String(i + 1).padStart(2, '0')}</span>
+                          <span className="plan-step-title">{step.title}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="tool-label">{t('chat.input')}</div>
+                <pre>{JSON.stringify(body === undefined ? call.input : rest, null, 2)}</pre>
+                {body !== undefined && <pre className="tool-content">{body}</pre>}
+              </>
+            )}
+            {output !== undefined && !(isPlanTool && status !== 'error' && parsedPlan?.ok) && (
               <>
                 <div className="tool-label-row">
                   <span className="tool-label">{t('chat.output')}</span>

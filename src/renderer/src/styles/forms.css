@@ -19,7 +19,7 @@
 .confirm-msg { color: var(--ink-2); font-size: var(--t-14); line-height: 1.55; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 6px 24px; }
 .dialog-head h2 { font-size: var(--t-18); letter-spacing: -0.005em; }
-.dialog-body { padding: 10px 24px 24px; overflow-y: auto; display: grid; gap: 16px; }
+.dialog-body { padding: 10px 24px 24px; overflow-y: auto; overscroll-behavior-y: contain; display: grid; gap: 16px; }
 .dialog-note { color: var(--muted); font-size: var(--t-13); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 6px; }
 

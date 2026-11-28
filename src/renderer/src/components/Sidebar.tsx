@@ -1,26 +1,56 @@
 import { useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { Archive, ArchiveRestore, ArrowDown, ArrowDownAZ, ArrowUp, BrainCircuit, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, Command, Copy, Download, FolderOpen, FolderPlus, GitBranch, GitFork, MessageSquare, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Trash2, UserCircle2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowDownAZ, ArrowUp, BrainCircuit, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, Command, Copy, Download, FolderInput, FolderOpen, FolderPlus, GitBranch, GitFork, MessageSquare, MoreHorizontal, Network, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Trash2, UserCircle2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { isEmptyChatStub, type ConversationMeta } from '@shared/types.ts'
 import { deleteChat, forkChat, newChat, openChat, stopChat } from '../lib/chats.ts'
-import { installAppUpdate, liveFor, navigate, openAccountModal, openFleetModal, openPolicyModal, openSettings, openUpdatePrompt, setState, toast, toggleSidebar, useStore, type View } from '../lib/store.ts'
+import { installAppUpdate, liveFor, navigate, openAccountModal, openFleetModal, openPolicyModal, openSessionImportModal, openSettings, openUpdatePrompt, setState, toast, toggleSidebar, useStore, type View } from '../lib/store.ts'
 import { useFeatureText } from '../locales/features.ts'
 import { call, errorMessage, shell } from '../lib/api.ts'
 import { AccountAvatar } from './AccountPanel.tsx'
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu.tsx'
 import { ConfirmDialog } from './Dialog.tsx'
-import { HistoryNavButtons, WorkSceneSwitch } from './HeaderControls.tsx'
+import { ArchiveModeQuickButton, HistoryNavButtons, WorkSceneSwitch } from './HeaderControls.tsx'
 import { Oculus } from './Oculus.tsx'
 import { folderName, pickWorkspace, removeRecentWorkspace } from './WorkspacePicker.tsx'
 
-const NAV: { view: View; icon: typeof Plug; key: string }[] = [
+const PRIMARY_NAV: { view: View; icon: typeof Plug; key: string }[] = [
   { view: 'connections', icon: Plug, key: 'nav.connections' },
-  { view: 'market', icon: Store, key: 'nav.marketplace' },
-  { view: 'automations', icon: Clock, key: 'nav.automations' },
-  { view: 'knowledge', icon: BrainCircuit, key: 'nav.knowledge' },
 ]
 
+const MORE_NAV: { view: View; icon: typeof Store; key: string }[] = [
+  { view: 'knowledge', icon: BrainCircuit, key: 'nav.knowledge' },
+  { view: 'market', icon: Store, key: 'nav.marketplace' },
+  { view: 'automations', icon: Clock, key: 'nav.automations' },
+]
+
+const MORE_OPEN_STORAGE_KEY = 'atrium:sidebar-more-open'
+
+function readInitialMoreOpen(): boolean {
+  try {
+    return window.localStorage.getItem(MORE_OPEN_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
 const UNSCOPED_KEY = '__unscoped__'
+
+const SOURCE_BADGE_MAP: Record<string, string> = {
+  'claude-code': 'Claude',
+  codex: 'Codex',
+  dsh: 'DSH',
+  antigravity: 'AGY',
+  cursor: 'Cursor',
+  'gemini-cli': 'Gemini',
+  cline: 'Cline',
+  opencode: 'OpenCode',
+  aider: 'Aider',
+  custom: 'Import',
+}
+
+function shortSourceBadge(source: string, sourceLabel?: string): string {
+  return SOURCE_BADGE_MAP[source] ?? sourceLabel ?? source
+}
 
 function wsKey(path: string | undefined): string {
   return path ? path.replace(/[\\/]+$/, '').toLowerCase() : UNSCOPED_KEY
@@ -71,6 +101,8 @@ export function Sidebar({
   const connected = useStore((s) => Object.values(s.statuses).filter((st) => st?.state === 'connected').length)
   const enabledAutos = useStore((s) => s.automations.filter((a) => a.enabled).length)
   const memoryAndKbCount = useStore((s) => s.memories.length + (s.knowledge?.sourceCount ?? 0))
+  const platformSessions = useStore((s) => s.platformSessions)
+  const platformRunningCount = platformSessions.reduce((sum, x) => sum + (x.runningCount ?? 0), 0)
   const providers = useStore((s) => s.providers)
   const account = useStore((s) => s.account)
   const update = useStore((s) => s.update)
@@ -85,6 +117,7 @@ export function Sidebar({
   const [chatQuery, setChatQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
+  const [moreOpen, setMoreOpen] = useState<boolean>(readInitialMoreOpen)
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
     y: number
@@ -221,6 +254,31 @@ export function Sidebar({
     } catch (err) {
       toast(errorMessage(err), 'error')
     }
+  }
+
+  const activeMoreLabel =
+    view === 'knowledge'
+      ? t('nav.knowledge')
+      : view === 'market'
+        ? t('nav.marketplace')
+        : view === 'automations'
+          ? t('nav.automations')
+          : fleetOpen
+            ? ft('fleet.navLabel')
+            : policyOpen
+              ? ft('policy.navLabel')
+              : null
+
+  const toggleMore = () => {
+    setMoreOpen((prev) => {
+      const next = !prev
+      try {
+        window.localStorage.setItem(MORE_OPEN_STORAGE_KEY, String(next))
+      } catch {
+        /* ignore storage failure */
+      }
+      return next
+    })
   }
 
   const folderGroups = workspaceGroups.filter((g) => Boolean(g.path))
@@ -520,6 +578,7 @@ export function Sidebar({
           <div className="side-top-acts">
             <HistoryNavButtons />
             <WorkSceneSwitch compact />
+            <ArchiveModeQuickButton compact />
             <button className="icon-btn" onClick={toggleSidebar} aria-label={t('nav.hideSidebar')} title={t('nav.hideSidebar')}>
               <PanelLeftClose size={16} />
             </button>
@@ -533,49 +592,106 @@ export function Sidebar({
           </span>
           <span>{t('nav.newChat')}</span>
         </button>
-        {NAV.map(({ view: v, icon: Icon, key }) => (
+        <button
+          type="button"
+          data-view="platform"
+          className={`side-item${view === 'platform' ? ' active' : ''}`}
+          onClick={() => navigate({ view: 'platform', chatId: null })}
+        >
+          <Network size={17} strokeWidth={1.75} />
+          <span>{ft('platform.navLabel')}</span>
+          <span className="side-beta-pill">{ft('platform.testBadge')}</span>
+          {platformRunningCount > 0 && (
+            <span className="side-count side-fleet-badge is-running">{platformRunningCount}</span>
+          )}
+        </button>
+        {PRIMARY_NAV.map(({ view: v, icon: Icon, key }) => (
           <button key={v} data-view={v} className={`side-item${view === v ? ' active' : ''}`} onClick={() => navigate({ view: v, chatId: null })}>
             <Icon size={17} strokeWidth={1.75} />
             <span>{t(key)}</span>
             {v === 'connections' && connected > 0 && <span className="side-count">{connected}</span>}
-            {v === 'automations' && enabledAutos > 0 && <span className="side-count">{enabledAutos}</span>}
-            {v === 'knowledge' && memoryAndKbCount > 0 && <span className="side-count">{memoryAndKbCount}</span>}
           </button>
         ))}
-        <button
-          type="button"
-          className={`side-item${fleetOpen ? ' active' : ''}`}
-          onClick={openFleetModal}
-        >
-          <GitFork size={17} strokeWidth={1.75} />
-          <span>{ft('fleet.navLabel')}</span>
-          {worktreeChats.length > 0 && (
-            <span className={`side-count side-fleet-badge${busyWorktrees > 0 ? ' is-running' : ''}`}>
-              {worktreeChats.length}
-            </span>
+        <div className="side-more-wrap">
+          <button
+            type="button"
+            className={`side-item side-more-toggle${moreOpen ? ' open' : ''}${!moreOpen && activeMoreLabel ? ' active' : ''}`}
+            aria-expanded={moreOpen}
+            onClick={toggleMore}
+          >
+            <MoreHorizontal size={17} strokeWidth={1.75} />
+            <span>{ft('sidebar.more')}</span>
+            {!moreOpen && activeMoreLabel ? (
+              <span className="side-more-active-tag">{activeMoreLabel}</span>
+            ) : !moreOpen && busyWorktrees > 0 ? (
+              <span className="side-count side-fleet-badge is-running">{busyWorktrees}</span>
+            ) : null}
+            <ChevronRight size={14} className="side-more-chev" aria-hidden />
+          </button>
+          {moreOpen && (
+            <div className="side-more-list">
+              {MORE_NAV.map(({ view: v, icon: Icon, key }) => (
+                <button
+                  key={v}
+                  type="button"
+                  data-view={v}
+                  className={`side-item side-more-item${view === v ? ' active' : ''}`}
+                  onClick={() => navigate({ view: v, chatId: null })}
+                >
+                  <Icon size={15} strokeWidth={1.75} />
+                  <span>{t(key)}</span>
+                  {v === 'automations' && enabledAutos > 0 && <span className="side-count">{enabledAutos}</span>}
+                  {v === 'knowledge' && memoryAndKbCount > 0 && <span className="side-count">{memoryAndKbCount}</span>}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={`side-item side-more-item${fleetOpen ? ' active' : ''}`}
+                onClick={openFleetModal}
+              >
+                <GitFork size={15} strokeWidth={1.75} />
+                <span>{ft('fleet.navLabel')}</span>
+                {worktreeChats.length > 0 && (
+                  <span className={`side-count side-fleet-badge${busyWorktrees > 0 ? ' is-running' : ''}`}>
+                    {worktreeChats.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={`side-item side-more-item${policyOpen ? ' active' : ''}`}
+                onClick={openPolicyModal}
+              >
+                <ShieldCheck size={15} strokeWidth={1.75} />
+                <span>{ft('policy.navLabel')}</span>
+              </button>
+            </div>
           )}
-        </button>
-        <button
-          type="button"
-          className={`side-item${policyOpen ? ' active' : ''}`}
-          onClick={openPolicyModal}
-        >
-          <ShieldCheck size={17} strokeWidth={1.75} />
-          <span>{ft('policy.navLabel')}</span>
-        </button>
+        </div>
       </nav>
 
       <div className="side-group-row">
         <span className="side-group-label">{t('nav.workspaces')}</span>
-        <button
-          type="button"
-          className="icon-btn side-group-action"
-          onClick={() => void addWorkspace()}
-          aria-label={t('chat.addWorkspace')}
-          title={t('chat.addWorkspace')}
-        >
-          <FolderPlus size={14} />
-        </button>
+        <div className="side-group-actions">
+          <button
+            type="button"
+            className="icon-btn side-group-action"
+            onClick={openSessionImportModal}
+            aria-label={ft('sessionImport.sidebarTooltip')}
+            title={ft('sessionImport.sidebarTooltip')}
+          >
+            <FolderInput size={14} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn side-group-action"
+            onClick={() => void addWorkspace()}
+            aria-label={t('chat.addWorkspace')}
+            title={t('chat.addWorkspace')}
+          >
+            <FolderPlus size={14} />
+          </button>
+        </div>
       </div>
 
       {(realChats.length > 0 || workspaceOrder.size > 0) && (
@@ -609,7 +725,19 @@ export function Sidebar({
 
       <nav className="chat-list" aria-label={t('nav.chats')}>
         {workspaceGroups.length === 0 && (
-          <p className="side-empty">{q ? t('chat.noMatchingChats') : t('nav.noChats')}</p>
+          <div className="side-empty-wrap">
+            <p className="side-empty">{q ? t('chat.noMatchingChats') : t('nav.noChats')}</p>
+            {!q && (
+              <button
+                type="button"
+                className="btn btn-small side-empty-import-btn"
+                onClick={openSessionImportModal}
+              >
+                <FolderInput size={13} />
+                <span>{ft('sessionImport.sidebarEmptyCta')}</span>
+              </button>
+            )}
+          </div>
         )}
         {workspaceGroups.map((g) => {
           const isCollapsed = q ? false : Boolean(collapsed[g.key])
@@ -730,6 +858,16 @@ export function Sidebar({
                                 {c.worktreeBranch && (
                                   <span className="chat-wt-pill" title={c.worktreeBranch}>
                                     {c.worktreeBranch.replace(/^atrium\//, '')}
+                                  </span>
+                                )}
+                                {!c.worktreeBranch && c.importedFrom && (
+                                  <span
+                                    className={`chat-import-pill source-${c.importedFrom.source}`}
+                                    title={ft('sessionImport.importedFromTooltip', {
+                                      source: c.importedFrom.sourceLabel || c.importedFrom.source,
+                                    })}
+                                  >
+                                    {shortSourceBadge(c.importedFrom.source, c.importedFrom.sourceLabel)}
                                   </span>
                                 )}
                                 {!busy.has(c.id) && (

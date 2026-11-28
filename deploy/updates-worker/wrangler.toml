@@ -7,6 +7,9 @@ routes = [
   { pattern = "updates.rpulse.top", custom_domain = true }
 ]
 
+[vars]
+GITHUB_REPO = "yasmeendawnelle-spec/Atrium"
+
 [[kv_namespaces]]
 binding = "ATRIUM_RELEASES_KV"
 id = "39857097b85946fa8141e94b44cb00b9"

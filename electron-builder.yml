@@ -58,7 +58,8 @@ linux:
       Name: Atrium
       StartupWMClass: atrium
   artifactName: ${productName}-${version}-linux-${arch}.${ext}
-# Live Cloudflare Worker update feed (served via deployed atrium-updates Worker).
+# Live Cloudflare Worker proxy backed automatically by GitHub Releases (yasmeendawnelle-spec/Atrium).
 publish:
   provider: generic
-  url: https://updates.rpulse.top/win
+  url: https://updates.rpulse.top/latest
+  useMultipleRangeRequest: false

@@ -146,22 +146,29 @@ select.input {
 .switch input:focus-visible + span { outline: 2px solid var(--accent-border); outline-offset: 2px; }
 
 /* The Atrium mark: 3D isometric interlocking architectural prism + cursor-crystal */
-.oculus { display: inline-block; flex: none; }
-.oculus svg { display: block; overflow: visible; }
-.oculus-glow,
+.oculus { position: relative; display: inline-block; flex: none; contain: layout style; }
+.oculus-glow {
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  background: var(--accent-tint);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0) scale(0.84);
+  will-change: transform, opacity;
+  transition: background-color 0.28s var(--ease);
+}
 .oculus-prism,
 .oculus-core {
-  transform-box: view-box;
-  transform-origin: 12px 12px;
-  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: visible;
+  transform-origin: 50% 50%;
+  will-change: transform;
 }
-
-.oculus-glow {
-  fill: var(--accent-tint);
-  stroke: none;
-  opacity: 0;
-  transform: scale(0.84);
-  transition: opacity 0.25s var(--ease), transform 0.25s var(--ease);
+.oculus-idle .oculus-prism {
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* Idle state: gentle autonomous cursor-crystal levitation */
@@ -169,54 +176,49 @@ select.input {
   animation: oculus-idle-core 3.8s ease-in-out infinite;
 }
 
-/* Thinking state: smooth isometric portal rotation + expressive agent cursor seek */
-.oculus-thinking .oculus-glow {
+/* Thinking and Tool states share identical continuous rhythm so phase never jumps or restarts on transition */
+.oculus-thinking .oculus-glow,
+.oculus-tool .oculus-glow {
   animation: oculus-ripple 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
 }
-.oculus-thinking .oculus-prism {
-  animation: oculus-prism-spin 3.6s linear infinite;
+.oculus-tool .oculus-glow {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
-.oculus-thinking .oculus-core {
+.oculus-thinking .oculus-prism,
+.oculus-tool .oculus-prism {
+  animation: oculus-prism-spin 3.2s linear infinite;
+}
+.oculus-thinking .oculus-core,
+.oculus-tool .oculus-core {
   animation: oculus-core-seek 2.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
-/* Tool state: crisp high-cadence prism drive while executing tools */
-.oculus-tool .oculus-glow {
-  animation: oculus-ripple 1.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
-}
-.oculus-tool .oculus-prism {
-  animation: oculus-prism-spin 1.6s linear infinite;
-}
-.oculus-tool .oculus-core {
-  animation: oculus-core-seek 1.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
-}
-
 .oculus-approval .oculus-glow {
-  fill: var(--warn-tint);
+  background: var(--warn-tint);
   opacity: 0.72;
   animation: oculus-ripple 2.4s ease-out infinite;
 }
 
 @keyframes oculus-idle-core {
-  0%, 100% { transform: translateY(0px) rotate(0deg) scale(1); }
-  25% { transform: translateY(-0.65px) rotate(-4deg) scale(1.04); }
-  50% { transform: translateY(0.15px) rotate(0deg) scale(0.98); }
-  75% { transform: translateY(-0.65px) rotate(4deg) scale(1.04); }
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  25% { transform: translate3d(0, -0.65px, 0) rotate(-4deg) scale(1.04); }
+  50% { transform: translate3d(0, 0.15px, 0) rotate(0deg) scale(0.98); }
+  75% { transform: translate3d(0, -0.65px, 0) rotate(4deg) scale(1.04); }
 }
 @keyframes oculus-prism-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 @keyframes oculus-core-seek {
-  0%, 100% { transform: translateY(0px) rotate(0deg) scale(1); }
-  25% { transform: translateY(-0.55px) rotate(-10deg) scale(1.06); }
-  50% { transform: translateY(0px) rotate(0deg) scale(0.94); }
-  75% { transform: translateY(-0.55px) rotate(10deg) scale(1.06); }
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  25% { transform: translate3d(0, -0.55px, 0) rotate(-10deg) scale(1.06); }
+  50% { transform: translate3d(0, 0, 0) rotate(0deg) scale(0.94); }
+  75% { transform: translate3d(0, -0.55px, 0) rotate(10deg) scale(1.06); }
 }
 @keyframes oculus-ripple {
-  0% { opacity: 0.68; transform: scale(0.78); }
-  75% { opacity: 0; transform: scale(1.36); }
-  100% { opacity: 0; transform: scale(1.36); }
+  0% { opacity: 0.68; transform: translate3d(0, 0, 0) scale(0.78); }
+  75% { opacity: 0; transform: translate3d(0, 0, 0) scale(1.36); }
+  100% { opacity: 0; transform: translate3d(0, 0, 0) scale(1.36); }
 }
 
 @media (prefers-reduced-motion: reduce) {

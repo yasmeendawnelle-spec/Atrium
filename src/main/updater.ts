@@ -165,7 +165,7 @@ export interface AutoUpdaterLike {
   logger: { info(msg?: unknown): void; warn(msg?: unknown): void; error(msg?: unknown): void } | null
   on(event: string, listener: (...args: any[]) => void): unknown
   removeListener(event: string, listener: (...args: any[]) => void): unknown
-  setFeedURL(options: { provider: 'generic'; url: string } | string): void
+  setFeedURL(options: { provider: 'generic'; url: string; useMultipleRangeRequest?: boolean } | string): void
   checkForUpdates(): Promise<unknown>
   downloadUpdate(): Promise<unknown>
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void
@@ -317,7 +317,7 @@ export class AppUpdaterController {
       // Allow testing or custom enterprise feeds even when running unpackaged.
       this.updater.forceDevUpdateConfig = true
       if (this.appliedFeedUrl !== cfg.feedUrl) {
-        this.updater.setFeedURL({ provider: 'generic', url: cfg.feedUrl })
+        this.updater.setFeedURL({ provider: 'generic', url: cfg.feedUrl, useMultipleRangeRequest: false })
         this.appliedFeedUrl = cfg.feedUrl
       }
     }

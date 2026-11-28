@@ -235,8 +235,15 @@ export async function rewindChatTurn(id: string, messageIndex: number, revertFil
           text: res.draftText,
         }
       }
+      const curLive = s.live[id]
+      let nextLive = s.live
+      if (curLive && curLive.plan !== undefined) {
+        const { plan: _droppedPlan, ...restLive } = curLive
+        nextLive = { ...s.live, [id]: restLive }
+      }
       return {
         conversations: { ...s.conversations, [id]: res.conversation },
+        ...(nextLive !== s.live ? { live: nextLive } : {}),
         drafts,
         changesRevision: s.changesRevision + 1,
       }

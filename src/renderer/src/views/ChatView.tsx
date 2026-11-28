@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -33,6 +33,8 @@ import {
   type WorkScene,
 } from '@shared/types.ts'
 import { groupModelsByVendor, type ModelVendorGroup } from '@shared/relaypulse.ts'
+import { resolveOrchestratorExecutor, shortModelLabel } from '@shared/orchestrator.ts'
+import { derivePlanFromMessages, getPlanStats, UPDATE_PLAN_TOOL_NAME } from '@shared/plan.ts'
 import { call, errorMessage, shell } from '../lib/api.ts'
 import { extractConversationArtifacts, extractLiveArtifactsTail, type ParsedArtifact } from '../lib/artifacts.ts'
 import { computeContextBreakdown } from '../lib/contextUsage.ts'
@@ -57,9 +59,11 @@ import {
   diffReviewKey,
   draftKey,
   EMPTY_DRAFT,
+  getChatStream,
   getState,
   liveFor,
   navigate,
+  openSessionImportModal,
   openSettings,
   refreshSkills,
   removeDiffComment,
@@ -70,13 +74,16 @@ import {
   updateDraft,
   useStore,
 } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { ApprovalCard } from '../components/ApprovalCard.tsx'
 import { Composer, type SlashAction } from '../components/Composer.tsx'
 import { Dialog } from '../components/Dialog.tsx'
 import { EffortMeter, EffortSlider } from '../components/EffortSlider.tsx'
+import { OrchestratorChip, OrchestratorToggle } from '../components/Orchestrator.tsx'
 import { UltracodeChip, UltracodeToggle } from '../components/Ultracode.tsx'
 import { MessageList } from '../components/MessageList.tsx'
 import { Oculus, type OculusState } from '../components/Oculus.tsx'
+import { PlanProgressCard } from '../components/PlanProgressCard.tsx'
 import { StudioDrawer, type StudioTab } from '../components/StudioDrawer.tsx'
 import { Tile } from '../components/Tile.tsx'
 import { splitToolName } from '../components/ToolRow.tsx'
@@ -108,6 +115,9 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
   const chatId = useStore((s) => s.activeChatId)
   const effort = useStore((s) => s.settings?.reasoningEffort ?? 'auto')
   const ultracode = useStore((s) => s.settings?.ultracode === true)
+  const orchestratorOn = useStore((s) => s.settings?.orchestratorEnabled === true)
+  const orchestratorExecutorProviderId = useStore((s) => s.settings?.orchestratorExecutorProviderId)
+  const orchestratorExecutorModel = useStore((s) => s.settings?.orchestratorExecutorModel)
   const active = providers.find((p) => p.id === activeId) ?? providers[0]
   const [open, setOpen] = useState(false)
   const [modelQuery, setModelQuery] = useState('')
@@ -127,7 +137,7 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
     direction,
     align: 'right',
     minHeight: 280,
-    maxHeight: 520,
+    maxHeight: 560,
   })
 
   if (!active) return null
@@ -351,6 +361,24 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
                 setState({ settings: await call('settings.update', { ultracode: next }) })
               }}
             />
+            <OrchestratorToggle
+              checked={orchestratorOn}
+              providers={providers}
+              activeProvider={active}
+              executorProviderId={orchestratorExecutorProviderId}
+              executorModel={orchestratorExecutorModel}
+              onChange={async (next) => {
+                setState({ settings: await call('settings.update', { orchestratorEnabled: next }) })
+              }}
+              onSelectExecutor={async (providerId, model) => {
+                setState({
+                  settings: await call('settings.update', {
+                    orchestratorExecutorProviderId: providerId ?? '',
+                    orchestratorExecutorModel: model ?? '',
+                  }),
+                })
+              }}
+            />
           </div>
         </div>
         <div className="model-popover-foot">
@@ -374,8 +402,50 @@ function ModelPicker({ direction = 'up' }: { direction?: 'up' | 'down' }) {
 const EMPTY_QUEUE: QueuedMessage[] = []
 const EMPTY_REVIEW: DiffReviewComment[] = []
 
+const ThinkingBar = memo(function ThinkingBar({
+  oculus,
+  label,
+  orchestrator,
+}: {
+  oculus: OculusState
+  label: string
+  orchestrator?: { phase: 'plan' | 'execute' | 'review'; model: string }
+}) {
+  const ft = useFeatureText()
+  return (
+    <div className="working">
+      <div
+        className={`thinking-bar thinking-${oculus}${orchestrator ? ` thinking-phase-${orchestrator.phase}` : ''}`}
+        role="status"
+        aria-live="polite"
+      >
+        <Oculus state={oculus} size={22} />
+        {orchestrator && (
+          <>
+            <span className={`thinking-phase-pill orch-phase-${orchestrator.phase}`}>
+              {ft(`orchestrator.phase.${orchestrator.phase}`)}
+            </span>
+            <span className="thinking-phase-model">{shortModelLabel(orchestrator.model)}</span>
+            <span className="thinking-sep" aria-hidden>
+              ·
+            </span>
+          </>
+        )}
+        <span className="thinking-label">{label}</span>
+        <span className="thinking-wave" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </span>
+      </div>
+    </div>
+  )
+})
+
 export function ChatView() {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const chatId = useStore((s) => s.activeChatId)
   const conversation = useStore((s) => (chatId ? s.conversations[chatId] : undefined))
   const live = useStore((s) => liveFor(s, chatId))
@@ -400,6 +470,19 @@ export function ChatView() {
   const autoCompact = useStore((s) => s.settings?.autoCompact !== false)
   const contextWindowTokens = useStore((s) => s.settings?.contextWindowTokens)
   const ultracodeOn = useStore((s) => s.settings?.ultracode === true)
+  const orchestratorOn = useStore((s) => s.settings?.orchestratorEnabled === true)
+  const orchestratorExecutorProviderId = useStore((s) => s.settings?.orchestratorExecutorProviderId)
+  const orchestratorExecutorModel = useStore((s) => s.settings?.orchestratorExecutorModel)
+  const resolvedExecutor = useMemo(
+    () =>
+      activeProvider
+        ? resolveOrchestratorExecutor(providers, activeProvider, {
+            orchestratorExecutorProviderId,
+            orchestratorExecutorModel,
+          })
+        : null,
+    [providers, activeProvider, orchestratorExecutorProviderId, orchestratorExecutorModel],
+  )
   const changesRevision = useStore((s) => s.changesRevision)
   const terminalSessions = useStore((s) => s.terminalSessions)
   const terminalRequestedOpen = useStore((s) => s.terminalRequestedOpen)
@@ -437,6 +520,13 @@ export function ChatView() {
   )
   const savedMessagesLen = conversation?.messages.length ?? 0
 
+  const activePlan = useMemo(() => {
+    if (live.plan !== undefined) return live.plan ?? undefined
+    if (conversation?.plan) return conversation.plan
+    return conversation?.messages ? derivePlanFromMessages(conversation.messages) : undefined
+  }, [live.plan, conversation?.plan, conversation?.messages])
+  const activePlanStats = useMemo(() => (activePlan ? getPlanStats(activePlan) : null), [activePlan])
+
   useEffect(() => {
     setStreamingArtifacts([])
     if (!chatId) return
@@ -472,8 +562,7 @@ export function ChatView() {
         timer = setTimeout(() => {
           timer = null
           lastCheck = Date.now()
-          const cur = getState().streams[chatId]
-          if (cur) evaluate(cur.text)
+          evaluate(getChatStream(chatId).text)
         }, wait)
       }
     })
@@ -658,6 +747,23 @@ export function ChatView() {
       await call('agent.revokeAllows', workspace).catch(() => undefined)
       setState({ sessionAllows: [] })
       toast(t('chat.trustRevoked'))
+    } else if (action === 'orchestrator') {
+      const next = !orchestratorOn
+      setState({ settings: await call('settings.update', { orchestratorEnabled: next }) })
+      toast(
+        next && activeProvider && resolvedExecutor
+          ? ft('orchestrator.toggledOn', {
+              planner: shortModelLabel(activeProvider.model),
+              executor: shortModelLabel(resolvedExecutor.model),
+            })
+          : ft('orchestrator.toggledOff'),
+      )
+    } else if (action === 'ultracode') {
+      const next = !ultracodeOn
+      setState({ settings: await call('settings.update', { ultracode: next }) })
+      toast(ft(next ? 'ultracode.toggledOn' : 'ultracode.toggledOff'))
+    } else if (action === 'import') {
+      openSessionImportModal()
     }
   }
 
@@ -684,49 +790,135 @@ export function ChatView() {
         ? 'error'
         : 'idle'
 
-  const activeToolCall = conversation?.messages
-    .slice()
-    .reverse()
-    .flatMap((m) => (m.role === 'assistant' ? m.toolCalls : []))
-    .find((c) => live.tools[c.id]?.status === 'running')
+  const activeToolCall = (() => {
+    const msgs = conversation?.messages
+    if (!msgs) return undefined
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]!
+      if (m.role !== 'assistant') continue
+      for (const tc of m.toolCalls) {
+        if (live.tools[tc.id]?.status === 'running') return tc
+      }
+    }
+    return undefined
+  })()
   const isAutoCompacting = Boolean(live.compacting?.active)
+  const livePlanStats = live.plan ? getPlanStats(live.plan) : null
+  const activePlanFocus =
+    live.plan && livePlanStats && !livePlanStats.isAllDone
+      ? live.plan.focus ?? livePlanStats.activeStep?.title
+      : undefined
   const thinkingLabel = compacting
     ? t('chat.compacting')
     : isAutoCompacting
       ? t('chat.autoCompacting')
-      : activeToolCall
+      : activeToolCall && activeToolCall.name !== UPDATE_PLAN_TOOL_NAME
         ? t('chat.thinkingTool', { tool: splitToolName(activeToolCall.name).tool })
-        : live.hasReasoning && !live.hasText
-          ? t('chat.thinkingDeep')
-          : live.hasText
-            ? t('chat.thinkingWrite')
-            : t('chat.thinking')
+        : activePlanFocus && livePlanStats
+          ? `${activePlanFocus} (${livePlanStats.done}/${livePlanStats.total})`
+          : live.hasReasoning && !live.hasText
+            ? t('chat.thinkingDeep')
+            : live.hasText
+              ? t('chat.thinkingWrite')
+              : t('chat.thinking')
+
+  const stickToBottomRef = useRef(true)
+  const lastScrollTopRef = useRef(0)
+  const showScrollBottomRef = useRef(false)
+  const programmaticScrollRef = useRef(false)
+  const scrollRafRef = useRef(0)
+  const prevChatIdRef = useRef<string | null>(null)
+  const prevMsgLenRef = useRef(0)
+
+  const msgCount = conversation?.messages.length ?? 0
+  if (prevChatIdRef.current !== chatId) {
+    prevChatIdRef.current = chatId
+    prevMsgLenRef.current = msgCount
+    stickToBottomRef.current = true
+  } else if (msgCount !== prevMsgLenRef.current) {
+    prevMsgLenRef.current = msgCount
+    if (msgCount > 0 && conversation?.messages[msgCount - 1]?.role === 'user') {
+      stickToBottomRef.current = true
+    }
+  }
 
   useEffect(() => {
-    const scrollIfNearBottom = () => {
+    showScrollBottomRef.current = false
+    setShowScrollBottom(false)
+  }, [chatId])
+
+  useEffect(() => {
+    let rafId = 0
+    const scrollNow = () => {
+      if (!stickToBottomRef.current) return
       const el = scroller.current
       if (!el) return
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 180
-      if (nearBottom) {
-        el.scrollTop = el.scrollHeight
+      programmaticScrollRef.current = true
+      el.scrollTop = el.scrollHeight
+      lastScrollTopRef.current = el.scrollTop
+      requestAnimationFrame(() => {
+        programmaticScrollRef.current = false
+      })
+      if (showScrollBottomRef.current) {
+        showScrollBottomRef.current = false
         setShowScrollBottom(false)
       }
     }
-    scrollIfNearBottom()
-    if (!chatId) return
-    return subscribeStream(chatId, scrollIfNearBottom)
+    const scheduleScroll = () => {
+      if (!stickToBottomRef.current || rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        scrollNow()
+      })
+    }
+    scrollNow()
+    const unsub = chatId ? subscribeStream(chatId, scheduleScroll) : undefined
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      unsub?.()
+    }
   }, [chatId, conversation?.messages.length, live.approvals.length])
 
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    }
+  }, [])
+
   const onScroll = () => {
-    const el = scroller.current
-    if (!el) return
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    setShowScrollBottom(dist > 200)
+    if (scrollRafRef.current) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0
+      const el = scroller.current
+      if (!el) return
+      const top = el.scrollTop
+      const dist = el.scrollHeight - top - el.clientHeight
+      if (!programmaticScrollRef.current) {
+        if (top < lastScrollTopRef.current - 2) {
+          stickToBottomRef.current = false
+        } else if (dist <= 48) {
+          stickToBottomRef.current = true
+        }
+      }
+      lastScrollTopRef.current = top
+      programmaticScrollRef.current = false
+      const nextShow = dist > 200
+      if (nextShow !== showScrollBottomRef.current) {
+        showScrollBottomRef.current = nextShow
+        setShowScrollBottom(nextShow)
+      }
+    })
   }
 
   const scrollToBottom = () => {
+    stickToBottomRef.current = true
+    if (showScrollBottomRef.current) {
+      showScrollBottomRef.current = false
+      setShowScrollBottom(false)
+    }
     const el = scroller.current
     if (!el) return
+    programmaticScrollRef.current = true
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }
 
@@ -913,6 +1105,16 @@ export function ChatView() {
       }
       trailing={
         <>
+          {orchestratorOn && activeProvider && resolvedExecutor && (
+            <OrchestratorChip
+              plannerModel={activeProvider.model}
+              executorModel={resolvedExecutor.model}
+              onOpenSettings={() => openSettings('general')}
+              onDisable={async () => {
+                setState({ settings: await call('settings.update', { orchestratorEnabled: false }) })
+              }}
+            />
+          )}
           {ultracodeOn && (
             <UltracodeChip
               onDisable={async () => {
@@ -1218,6 +1420,59 @@ export function ChatView() {
     </Dialog>
   )
 
+  const listActionsRef = useRef({
+    chatId,
+    conversation,
+    liveEndReason: live.endReason,
+    continuePrompt: '',
+    forkSuffix: '',
+    forkDoneText: '',
+    onEditUser: handleEditUser,
+    onApprovePlan: handleApprovePlan,
+  })
+  listActionsRef.current = {
+    chatId,
+    conversation,
+    liveEndReason: live.endReason,
+    continuePrompt: t('chat.continueTruncatedPrompt'),
+    forkSuffix: t('chat.forkSuffix'),
+    forkDoneText: t('chat.forkDone'),
+    onEditUser: handleEditUser,
+    onApprovePlan: handleApprovePlan,
+  }
+
+  const handleListRegenerate = useCallback(() => {
+    const cid = listActionsRef.current.chatId
+    if (cid) void regenerateChat(cid)
+  }, [])
+  const handleListEditUser = useCallback((idx: number, nextText: string) => {
+    void listActionsRef.current.onEditUser(idx, nextText)
+  }, [])
+  const handleListContinue = useCallback(() => {
+    const { conversation: conv, liveEndReason, continuePrompt } = listActionsRef.current
+    const lastMsg = conv?.messages[conv.messages.length - 1]
+    const resumingPartial =
+      liveEndReason === 'truncated' ||
+      liveEndReason === 'aborted' ||
+      (liveEndReason === 'error' && lastMsg?.role === 'assistant') ||
+      (!liveEndReason && lastMsg?.role === 'assistant' && Boolean(lastMsg.incomplete))
+    void sendMessage(resumingPartial ? continuePrompt : 'Continue.')
+  }, [])
+  const handleListApprovePlan = useCallback(() => {
+    void listActionsRef.current.onApprovePlan()
+  }, [])
+  const handleListFork = useCallback((idx: number) => {
+    const { chatId: cid, forkSuffix, forkDoneText } = listActionsRef.current
+    if (!cid) return
+    void forkChat(cid, idx, forkSuffix).then((id) => {
+      if (id) toast(forkDoneText)
+    })
+  }, [])
+  const handleListRewind = useCallback((idx: number) => {
+    setRewindRevertFiles(true)
+    setRewindTarget(idx)
+  }, [])
+
   if (empty) {
     const starters =
       workScene === 'work'
@@ -1466,7 +1721,14 @@ export function ChatView() {
               </button>
             </div>
           )}
-          <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
+          <div
+            className="chat-scroll"
+            ref={scroller}
+            onScroll={onScroll}
+            onWheel={(e) => {
+              if (e.deltaY < 0) stickToBottomRef.current = false
+            }}
+          >
             <MessageList
               chatId={chatId}
               messages={conversation.messages}
@@ -1477,55 +1739,26 @@ export function ChatView() {
               searchQuery={searchOpen ? chatSearch : undefined}
               activeSearchMatchIndex={searchOpen ? activeSearchMatchIdx : null}
               onOpenArtifact={openArtifactCanvas}
-              onRegenerate={chatId && !live.busy ? () => void regenerateChat(chatId) : undefined}
-              onEditUser={chatId && !live.busy ? (idx, nextText) => void handleEditUser(idx, nextText) : undefined}
-              onContinue={
-                !live.busy
-                  ? () => {
-                      const lastMsg = conversation.messages[conversation.messages.length - 1]
-                      const resumingPartial =
-                        live.endReason === 'truncated' ||
-                        live.endReason === 'aborted' ||
-                        (live.endReason === 'error' && lastMsg?.role === 'assistant') ||
-                        (!live.endReason && lastMsg?.role === 'assistant' && Boolean(lastMsg.incomplete))
-                      void sendMessage(resumingPartial ? t('chat.continueTruncatedPrompt') : 'Continue.')
-                    }
-                  : undefined
-              }
-              onApprovePlan={!live.busy ? () => void handleApprovePlan() : undefined}
-              onFork={
-                chatId
-                  ? (idx) =>
-                      void forkChat(chatId, idx, t('chat.forkSuffix')).then((id) => {
-                        if (id) toast(t('chat.forkDone'))
-                      })
-                  : undefined
-              }
-              onRewind={
-                chatId && !live.busy
-                  ? (idx) => {
-                      setRewindRevertFiles(true)
-                      setRewindTarget(idx)
-                    }
-                  : undefined
-              }
+              onRegenerate={chatId && !live.busy ? handleListRegenerate : undefined}
+              onEditUser={chatId && !live.busy ? handleListEditUser : undefined}
+              onContinue={!live.busy ? handleListContinue : undefined}
+              onApprovePlan={!live.busy ? handleListApprovePlan : undefined}
+              onFork={chatId ? handleListFork : undefined}
+              onRewind={chatId && !live.busy ? handleListRewind : undefined}
             />
             {live.approvals.map((a) => (
               <ApprovalCard key={a.approvalId} request={a} />
             ))}
             {(live.busy || compacting) && live.approvals.length === 0 && (
-              <div className="working">
-                <div className={`thinking-bar thinking-${oculus}`} role="status" aria-live="polite">
-                  <Oculus state={oculus} size={22} />
-                  <span className="thinking-label">{thinkingLabel}</span>
-                  <span className="thinking-wave" aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                </div>
-              </div>
+              <ThinkingBar
+                oculus={oculus}
+                label={thinkingLabel}
+                orchestrator={
+                  !compacting && !isAutoCompacting && live.orchestrator
+                    ? { phase: live.orchestrator.phase, model: live.orchestrator.model }
+                    : undefined
+                }
+              />
             )}
           </div>
           <footer className="chat-footer">
@@ -1534,6 +1767,9 @@ export function ChatView() {
                 <ArrowDown size={13} />
                 <span>{t('chat.scrollToBottom')}</span>
               </button>
+            )}
+            {activePlan && activePlan.steps.length > 0 && (
+              <PlanProgressCard chatId={chatId} plan={activePlan} busy={live.busy} />
             )}
             {notice}
             {makeComposer('up')}

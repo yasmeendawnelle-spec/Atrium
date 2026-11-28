@@ -59,10 +59,12 @@ function highlightDiff(text: string): ReactNode[] {
   })
 }
 
+const MAX_HIGHLIGHT_CHARS = 32_000
+
 /** Highlights a single line or block of source code into safe React elements. */
 export function highlightCode(code: string, rawLang = ''): ReactNode {
   const lang = rawLang.trim().toLowerCase()
-  if (!code) return code
+  if (!code || code.length > MAX_HIGHLIGHT_CHARS) return code
   if (isDiffLang(lang)) return highlightDiff(code)
   if (lang && !CODE_LANGS.has(lang) && lang !== 'code') return code
 

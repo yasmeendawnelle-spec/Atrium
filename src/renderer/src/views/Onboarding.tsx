@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Check, FolderOpen } from 'lucide-react'
+import { Check, FolderInput, FolderOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { View } from '../lib/store.ts'
 import { call } from '../lib/api.ts'
-import { setState, useStore } from '../lib/store.ts'
+import { openSessionImportModal, setState, useStore } from '../lib/store.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { Oculus } from '../components/Oculus.tsx'
 import { ProviderForm } from '../components/ProviderForm.tsx'
 import { pickWorkspace } from './ChatView.tsx'
@@ -15,6 +16,7 @@ async function finish(view: View) {
 
 export function Onboarding() {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const account = useStore((s) => s.account)
   const providers = useStore((s) => s.providers)
   const workspace = useStore((s) => s.settings?.workspace)
@@ -105,6 +107,18 @@ export function Onboarding() {
           <div className="onboarding-step">
             <p className="muted">{t('onboarding.step3Hint')}</p>
             <div className="dialog-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  void finish('chat').then(() => {
+                    openSessionImportModal()
+                  })
+                }
+              >
+                <FolderInput size={14} />
+                {ft('sessionImport.onboardingBtn')}
+              </button>
               <button className="btn" onClick={() => void finish('market')}>
                 {t('connections.browse')}
               </button>

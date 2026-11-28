@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { memo, useId } from 'react'
 
 export type OculusState = 'idle' | 'thinking' | 'tool' | 'approval' | 'error'
 
@@ -34,15 +34,15 @@ interface Palette {
 
 const PALETTES: Record<'default' | 'approval' | 'error', Palette> = {
   default: {
-    a1: '#F7B796',
-    a2: '#DE7B58',
-    b1: '#DF7A55',
-    b2: '#B55132',
-    c1: '#C05837',
-    c2: '#89341B',
-    coreLeft: '#FAD0BA',
-    coreRight: '#D46B48',
-    coreBase: '#923A20'
+    a1: 'var(--oculus-a1, #F7B796)',
+    a2: 'var(--oculus-a2, #DE7B58)',
+    b1: 'var(--oculus-b1, #DF7A55)',
+    b2: 'var(--oculus-b2, #B55132)',
+    c1: 'var(--oculus-c1, #C05837)',
+    c2: 'var(--oculus-c2, #89341B)',
+    coreLeft: 'var(--oculus-core-left, #FAD0BA)',
+    coreRight: 'var(--oculus-core-right, #D46B48)',
+    coreBase: 'var(--oculus-core-base, #923A20)',
   },
   approval: {
     a1: '#FCE09B',
@@ -73,7 +73,7 @@ const PALETTES: Record<'default' | 'approval' | 'error', Palette> = {
  * housing a faceted autonomous cursor-crystal in warm terracotta tones.
  * Rotates smoothly while the inner crystal levitates in active states.
  */
-export function Oculus({ state = 'idle', size = 20, label }: OculusProps) {
+export const Oculus = memo(function Oculus({ state = 'idle', size = 20, label }: OculusProps) {
   const uid = useId().replace(/:/g, '')
   const pal = state === 'approval' ? PALETTES.approval : state === 'error' ? PALETTES.error : PALETTES.default
   const ga = `oculus-pa-${uid}`
@@ -88,36 +88,31 @@ export function Oculus({ state = 'idle', size = 20, label }: OculusProps) {
       aria-label={label}
       aria-hidden={label ? undefined : true}
     >
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <span className="oculus-glow" aria-hidden="true" />
+      <svg className="oculus-prism" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <defs>
           <linearGradient id={ga} x1="7" y1="2" x2="20" y2="11" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={pal.a1} />
-            <stop offset="100%" stopColor={pal.a2} />
+            <stop offset="0%" style={{ stopColor: pal.a1 }} />
+            <stop offset="100%" style={{ stopColor: pal.a2 }} />
           </linearGradient>
           <linearGradient id={gb} x1="20" y1="9" x2="9" y2="21" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={pal.b1} />
-            <stop offset="100%" stopColor={pal.b2} />
+            <stop offset="0%" style={{ stopColor: pal.b1 }} />
+            <stop offset="100%" style={{ stopColor: pal.b2 }} />
           </linearGradient>
           <linearGradient id={gc} x1="9" y1="20" x2="6" y2="5" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={pal.c1} />
-            <stop offset="100%" stopColor={pal.c2} />
+            <stop offset="0%" style={{ stopColor: pal.c1 }} />
+            <stop offset="100%" style={{ stopColor: pal.c2 }} />
           </linearGradient>
         </defs>
-
-        <circle className="oculus-glow" cx="12" cy="12" r="10.6" />
-
-        <g className="oculus-prism">
-          <path d={BLADE} fill={`url(#${ga})`} />
-          <path d={BLADE} fill={`url(#${gb})`} transform="rotate(120 12 12)" />
-          <path d={BLADE} fill={`url(#${gc})`} transform="rotate(240 12 12)" />
-        </g>
-
-        <g className="oculus-core">
-          <path d={CORE_LEFT} fill={pal.coreLeft} />
-          <path d={CORE_RIGHT} fill={pal.coreRight} />
-          <path d={CORE_BASE} fill={pal.coreBase} />
-        </g>
+        <path d={BLADE} fill={`url(#${ga})`} />
+        <path d={BLADE} fill={`url(#${gb})`} transform="rotate(120 12 12)" />
+        <path d={BLADE} fill={`url(#${gc})`} transform="rotate(240 12 12)" />
+      </svg>
+      <svg className="oculus-core" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d={CORE_LEFT} style={{ fill: pal.coreLeft }} />
+        <path d={CORE_RIGHT} style={{ fill: pal.coreRight }} />
+        <path d={CORE_BASE} style={{ fill: pal.coreBase }} />
       </svg>
     </span>
   )
-}
+})

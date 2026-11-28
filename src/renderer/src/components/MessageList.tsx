@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronRight, Code2, Copy, GitBranch, Globe, Layers, ListChecks, Pencil, Play, RotateCcw, Sparkles, Undo2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { DocumentAttachment, ImageAttachment, Message, TokenUsage } from '@shared/types.ts'
+import type { DocumentAttachment, ImageAttachment, Message, OrchestratorPhase, TokenUsage } from '@shared/types.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { splitMessageSegments, type ParsedArtifact } from '../lib/artifacts.ts'
-import { streamFor, useStore, type LiveTurn } from '../lib/store.ts'
+import { useChatStream, useStore, type LiveTurn } from '../lib/store.ts'
 import { Dialog } from './Dialog.tsx'
 import { DocumentChip, DocumentPreviewModal } from './DocumentChip.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -12,7 +13,7 @@ import { ToolRow } from './ToolRow.tsx'
 
 type ToolMessage = Extract<Message, { role: 'tool' }>
 
-function Reasoning({ text, open, active }: { text: string; open?: boolean; active?: boolean }) {
+const Reasoning = memo(function Reasoning({ text, open, active }: { text: string; open?: boolean; active?: boolean }) {
   const { t } = useTranslation()
   const [isOpen, setIsOpen] = useState(Boolean(open))
 
@@ -35,7 +36,7 @@ function Reasoning({ text, open, active }: { text: string; open?: boolean; activ
       </div>
     </div>
   )
-}
+})
 
 function CompactSummary({ text }: { text: string }) {
   const { t } = useTranslation()
@@ -58,13 +59,27 @@ function CompactSummary({ text }: { text: string }) {
   )
 }
 
-function AssistantHead({ modelName, isPlan }: { modelName?: string; isPlan?: boolean }) {
+function AssistantHead({
+  modelName,
+  isPlan,
+  orchestratorPhase,
+}: {
+  modelName?: string
+  isPlan?: boolean
+  orchestratorPhase?: OrchestratorPhase
+}) {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   return (
     <div className="msg-head">
       <Oculus state="idle" size={16} />
       <span className="msg-author">Atrium</span>
       {modelName && <span className="msg-model">{modelName}</span>}
+      {orchestratorPhase && (
+        <span className={`orch-phase-badge orch-phase-${orchestratorPhase}`}>
+          {ft(`orchestrator.phase.${orchestratorPhase}`)}
+        </span>
+      )}
       {isPlan && <span className="plan-msg-badge">{t('mode.planBadge')}</span>}
     </div>
   )
@@ -432,7 +447,13 @@ const SavedAssistantRow = memo(function SavedAssistantRow({
       data-msg-idx={index}
       className={`msg msg-assistant${hit ? ' search-hit' : ''}${activeHit ? ' search-hit-active' : ''}`}
     >
-      {turnStart && <AssistantHead modelName={modelName} isPlan={m.mode === 'plan'} />}
+      {turnStart && (
+        <AssistantHead
+          modelName={m.model ?? modelName}
+          isPlan={m.mode === 'plan'}
+          orchestratorPhase={m.orchestratorPhase}
+        />
+      )}
       {m.reasoning && <Reasoning text={m.reasoning} open={defaultReasoningOpen} />}
       {m.text.trim() && (
         <RichAssistantContent
@@ -488,6 +509,7 @@ const StreamingTurn = memo(function StreamingTurn({
   messageIndex,
   needStreamingHead,
   modelName,
+  orchestratorPhase,
   defaultReasoningOpen,
   fencedArtifacts,
   activeArtifactUid,
@@ -497,16 +519,17 @@ const StreamingTurn = memo(function StreamingTurn({
   messageIndex: number
   needStreamingHead: boolean
   modelName?: string
+  orchestratorPhase?: OrchestratorPhase
   defaultReasoningOpen: boolean
   fencedArtifacts: ParsedArtifact[]
   activeArtifactUid?: string | null
   onOpenArtifact?: (uid: string) => void
 }) {
-  const stream = useStore((s) => streamFor(s, chatId))
+  const stream = useChatStream(chatId)
   if (!stream.text && !stream.reasoning) return null
   return (
     <div className="msg msg-assistant streaming">
-      {needStreamingHead && <AssistantHead modelName={modelName} />}
+      {needStreamingHead && <AssistantHead modelName={modelName} orchestratorPhase={orchestratorPhase} />}
       {stream.reasoning && <Reasoning text={stream.reasoning} open={!stream.text || defaultReasoningOpen} active={!stream.text} />}
       {stream.text && (
         <RichAssistantContent
@@ -522,7 +545,7 @@ const StreamingTurn = memo(function StreamingTurn({
   )
 })
 
-export function MessageList({
+export const MessageList = memo(function MessageList({
   chatId = null,
   messages,
   live,
@@ -597,7 +620,24 @@ export function MessageList({
   }, [artifacts])
 
   const lastSaved = messages[messages.length - 1]
-  const needStreamingHead = !lastSaved || lastSaved.role === 'user'
+  let lastSavedAssistant: AssistantMsg | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role === 'user') break
+    if (m.role === 'assistant') {
+      lastSavedAssistant = m
+      break
+    }
+  }
+  const needStreamingHead =
+    !lastSaved ||
+    lastSaved.role === 'user' ||
+    Boolean(
+      live.orchestrator &&
+        lastSavedAssistant &&
+        (lastSavedAssistant.orchestratorPhase !== live.orchestrator.phase ||
+          lastSavedAssistant.model !== live.orchestrator.model),
+    )
 
   return (
     <div className="messages">
@@ -626,6 +666,20 @@ export function MessageList({
         const prev = messages[i - 1]
         const next = messages[i + 1]
         const turnStart = !prev || prev.role === 'user'
+        let prevAssistant: AssistantMsg | undefined
+        for (let k = i - 1; k >= 0; k--) {
+          const cand = messages[k]!
+          if (cand.role === 'user') break
+          if (cand.role === 'assistant') {
+            prevAssistant = cand
+            break
+          }
+        }
+        const phaseChanged = Boolean(
+          m.orchestratorPhase &&
+            prevAssistant &&
+            (prevAssistant.orchestratorPhase !== m.orchestratorPhase || prevAssistant.model !== m.model),
+        )
         const endOfTurn = !next || next.role === 'user'
         const isLastMsg = i === messages.length - 1
         const canAct = Boolean(m.text.trim()) && isLastMsg && !live.busy
@@ -637,7 +691,7 @@ export function MessageList({
             key={i}
             m={m}
             index={i}
-            turnStart={turnStart}
+            turnStart={turnStart || phaseChanged}
             endOfTurn={endOfTurn}
             canAct={canAct}
             showFork={showFork}
@@ -662,7 +716,8 @@ export function MessageList({
         chatId={chatId}
         messageIndex={messages.length}
         needStreamingHead={needStreamingHead}
-        modelName={modelName}
+        modelName={live.orchestrator?.model ?? modelName}
+        orchestratorPhase={live.orchestrator?.phase}
         defaultReasoningOpen={defaultReasoningOpen}
         fencedArtifacts={fencedByMsg.get(messages.length) ?? EMPTY_ARTIFACTS}
         activeArtifactUid={activeArtifactUid}
@@ -761,4 +816,4 @@ export function MessageList({
       <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} />
     </div>
   )
-}
+})

@@ -16,14 +16,15 @@ function extractText(node: ReactNode): string {
   return ''
 }
 
-function CodeBlock({ children }: { children?: ReactNode }) {
+const CodeBlock = memo(function CodeBlock({ children, deferHighlight = false }: { children?: ReactNode; deferHighlight?: boolean }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const first = Array.isArray(children) ? children[0] : children
   const className = isValidElement<{ className?: string }>(first) ? (first.props.className ?? '') : ''
   const lang = /language-([\w-]+)/.exec(className)?.[1]?.toLowerCase() || 'code'
   const raw = extractText(children).replace(/\n$/, '')
-  const highlighted = highlightCode(raw, lang)
+  const skipHighlight = Boolean(deferHighlight && raw.length > 1200)
+  const highlighted = useMemo(() => (skipHighlight ? raw : highlightCode(raw, lang)), [raw, lang, skipHighlight])
 
   const copy = () => {
     void navigator.clipboard.writeText(raw).then(() => {
@@ -46,26 +47,45 @@ function CodeBlock({ children }: { children?: ReactNode }) {
       </pre>
     </div>
   )
+})
+
+const REMARK_PLUGINS = [remarkGfm]
+
+function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault()
+        if (href && /^https?:\/\//.test(href)) void shell.openExternal(href)
+      }}
+    >
+      {children}
+    </a>
+  )
 }
 
-const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string }) {
+const MD_COMPONENTS = {
+  pre: ({ children }: { children?: ReactNode }) => <CodeBlock>{children}</CodeBlock>,
+  a: MarkdownLink,
+}
+
+const MD_COMPONENTS_STREAMING_TAIL = {
+  pre: ({ children }: { children?: ReactNode }) => <CodeBlock deferHighlight>{children}</CodeBlock>,
+  a: MarkdownLink,
+}
+
+const MarkdownRenderer = memo(function MarkdownRenderer({
+  text,
+  streamingTail = false,
+}: {
+  text: string
+  streamingTail?: boolean
+}) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            onClick={(e) => {
-              e.preventDefault()
-              if (href && /^https?:\/\//.test(href)) void shell.openExternal(href)
-            }}
-          >
-            {children}
-          </a>
-        ),
-      }}
+      remarkPlugins={REMARK_PLUGINS}
+      components={streamingTail ? MD_COMPONENTS_STREAMING_TAIL : MD_COMPONENTS}
     >
       {text}
     </ReactMarkdown>
@@ -76,13 +96,15 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string
 // and links open in the user's browser instead of inside the app.
 export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const blocks = useMemo(
-    () => (streaming && text.length >= 600 ? splitStreamingMarkdownBlocks(text) : null),
+    () => (streaming ? splitStreamingMarkdownBlocks(text) : null),
     [text, streaming],
   )
   return (
     <div className="md">
       {blocks ? (
-        blocks.map((block, idx) => <MarkdownRenderer key={idx} text={block} />)
+        blocks.map((block, idx) => (
+          <MarkdownRenderer key={idx} text={block} streamingTail={idx === blocks.length - 1} />
+        ))
       ) : (
         <MarkdownRenderer text={text} />
       )}

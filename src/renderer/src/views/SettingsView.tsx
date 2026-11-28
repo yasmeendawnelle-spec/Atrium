@@ -13,6 +13,7 @@ import {
   Download,
   FileJson,
   FileText,
+  FolderInput,
   FolderOpen,
   Globe,
   Lock,
@@ -59,6 +60,7 @@ import {
   downloadAppUpdate,
   installAppUpdate,
   navigate,
+  openSessionImportModal,
   refreshPlugins,
   refreshSkills,
   scanLocalPlugins,
@@ -71,10 +73,12 @@ import {
 import { Dialog, ConfirmDialog } from '../components/Dialog.tsx'
 import { EffortSlider } from '../components/EffortSlider.tsx'
 import { UltracodeToggle } from '../components/Ultracode.tsx'
+import { OrchestratorToggle } from '../components/Orchestrator.tsx'
 import { AccountStatusCard } from '../components/AccountPanel.tsx'
 import { ModelCatalogDialog } from '../components/ModelCatalogDialog.tsx'
 import { ProviderForm } from '../components/ProviderForm.tsx'
 import { StudioSelect } from '../components/StudioSelect.tsx'
+import { useFeatureText } from '../locales/features.ts'
 import { Tile } from '../components/Tile.tsx'
 import { folderName, removeRecentWorkspace, setWorkspace } from '../components/WorkspacePicker.tsx'
 import { pickWorkspace } from './ChatView.tsx'
@@ -212,6 +216,26 @@ function extractSafeSettingsPatch(raw: unknown): Partial<AppSettings> | null {
     out.ultracode = src.ultracode
     count++
   }
+  if (typeof src.orchestratorEnabled === 'boolean') {
+    out.orchestratorEnabled = src.orchestratorEnabled
+    count++
+  }
+  if (typeof src.orchestratorExecutorProviderId === 'string') {
+    out.orchestratorExecutorProviderId = src.orchestratorExecutorProviderId.trim() || undefined
+    count++
+  }
+  if (typeof src.orchestratorExecutorModel === 'string') {
+    out.orchestratorExecutorModel = src.orchestratorExecutorModel.trim() || undefined
+    count++
+  }
+  if (typeof src.orchestratorMaxHandoffs === 'number' && Number.isFinite(src.orchestratorMaxHandoffs)) {
+    out.orchestratorMaxHandoffs = Math.max(1, Math.min(6, Math.floor(src.orchestratorMaxHandoffs)))
+    count++
+  }
+  if (typeof src.orchestratorSubagentsUseExecutor === 'boolean') {
+    out.orchestratorSubagentsUseExecutor = src.orchestratorSubagentsUseExecutor
+    count++
+  }
   if (src.workScene === 'code' || src.workScene === 'work') {
     out.workScene = src.workScene
     count++
@@ -240,7 +264,7 @@ interface NavItemDef {
 }
 
 const NAV_ITEMS: NavItemDef[] = [
-  { id: 'general', group: 'preferences', icon: Settings, keywords: ['theme', 'dark', 'light', 'language', 'width', 'transcript', 'view', 'reasoning', 'scene'] },
+  { id: 'general', group: 'preferences', icon: Settings, keywords: ['theme', 'dark', 'light', 'language', 'width', 'transcript', 'view', 'reasoning', 'scene', 'orchestrator', 'dual-model', 'planner', 'executor', '指挥官', '双模型'] },
   { id: 'models', group: 'preferences', icon: Sparkles, keywords: ['provider', 'api', 'key', 'model', 'openai', 'anthropic', 'codex', 'deepseek'] },
   { id: 'code', group: 'preferences', icon: Code2, keywords: ['code', 'font', 'size', 'diff', 'syntax', 'monokai', 'nord', 'github', 'bypass', 'permissions'] },
   { id: 'cowork', group: 'preferences', icon: FolderOpen, keywords: ['workspace', 'folder', 'web', 'search', 'compact', 'cowork', 'browser', 'edge', 'google', 'bing', '浏览器'] },
@@ -422,7 +446,9 @@ export const SettingsView = SettingsModal
 
 function GeneralSection() {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const settings = useStore((s) => s.settings)!
+  const providers = useStore((s) => s.providers)
   const widthVal: TranscriptWidth = settings.transcriptWidth ?? 'default'
   const viewVal: TranscriptViewMode = settings.defaultTranscriptView ?? 'normal'
   const effortVal: ReasoningEffort = settings.reasoningEffort ?? 'auto'
@@ -537,6 +563,38 @@ function GeneralSection() {
             variant="card"
             checked={settings.ultracode === true}
             onChange={(next) => void updateSetting({ ultracode: next })}
+          />
+        </div>
+
+        <div className="setting-row setting-row-stack">
+          <div className="setting-row-meta">
+            <strong>{ft('orchestrator.settingsTitle')}</strong>
+            <span>{ft('orchestrator.settingsHint')}</span>
+          </div>
+          <OrchestratorToggle
+            variant="card"
+            checked={settings.orchestratorEnabled === true}
+            providers={providers}
+            activeProvider={providers.find((p) => p.id === settings.activeProviderId) ?? providers[0]}
+            executorProviderId={settings.orchestratorExecutorProviderId}
+            executorModel={settings.orchestratorExecutorModel}
+            maxHandoffs={settings.orchestratorMaxHandoffs}
+            subagentsUseExecutor={settings.orchestratorSubagentsUseExecutor !== false}
+            onChange={(next) => void updateSetting({ orchestratorEnabled: next })}
+            onSelectExecutor={(providerId, model) =>
+              void updateSetting({
+                orchestratorExecutorProviderId: providerId ?? '',
+                orchestratorExecutorModel: model ?? '',
+              })
+            }
+            onUpdateAdvanced={(patch) =>
+              void updateSetting({
+                ...(patch.maxHandoffs !== undefined ? { orchestratorMaxHandoffs: patch.maxHandoffs } : {}),
+                ...(patch.subagentsUseExecutor !== undefined
+                  ? { orchestratorSubagentsUseExecutor: patch.subagentsUseExecutor }
+                  : {}),
+              })
+            }
           />
         </div>
 
@@ -1589,6 +1647,7 @@ function UsageSection() {
 
 function ImportExportSection() {
   const { t } = useTranslation()
+  const ft = useFeatureText()
   const settings = useStore((s) => s.settings)!
   const providers = useStore((s) => s.providers)
   const activeChatId = useStore((s) => s.activeChatId)
@@ -1616,6 +1675,11 @@ function ImportExportSection() {
         contextWindowTokens: normalizeContextWindowTokens(settings.contextWindowTokens),
         reasoningEffort: settings.reasoningEffort ?? 'auto',
         ultracode: settings.ultracode === true,
+        orchestratorEnabled: settings.orchestratorEnabled === true,
+        orchestratorExecutorProviderId: settings.orchestratorExecutorProviderId,
+        orchestratorExecutorModel: settings.orchestratorExecutorModel,
+        orchestratorMaxHandoffs: settings.orchestratorMaxHandoffs ?? 3,
+        orchestratorSubagentsUseExecutor: settings.orchestratorSubagentsUseExecutor !== false,
         workScene: settings.workScene ?? 'code',
         maxAgentRounds: settings.maxAgentRounds ?? 40,
         autoExtractMemory: settings.autoExtractMemory !== false,
@@ -1680,6 +1744,19 @@ function ImportExportSection() {
 
   return (
     <div className="settings-pane">
+      <div className="settings-group">
+        <div className="settings-pane-top">
+          <div className="settings-pane-head">
+            <h3>{ft('sessionImport.settingsTitle')}</h3>
+            <p>{ft('sessionImport.settingsDesc')}</p>
+          </div>
+          <button type="button" className="btn btn-primary btn-small" onClick={openSessionImportModal}>
+            <FolderInput size={14} />
+            {ft('sessionImport.settingsBtn')}
+          </button>
+        </div>
+      </div>
+
       <div className="settings-group">
         <div className="settings-pane-head">
           <h3>{t('settings.tabs.import')}</h3>

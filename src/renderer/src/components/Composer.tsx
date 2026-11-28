@@ -5,6 +5,8 @@ import {
   Brain,
   CornerDownRight,
   FileCode2,
+  FolderInput,
+  GitCompareArrows,
   Globe,
   ListChecks,
   ListPlus,
@@ -38,6 +40,7 @@ import { call, errorMessage, shell } from '../lib/api.ts'
 import { fileToImageAttachment, normalizeImageDataUrl } from '../lib/images.ts'
 import { getState, toast, useStore } from '../lib/store.ts'
 import type { ContextBreakdown } from '../lib/contextUsage.ts'
+import { useFeatureText } from '../locales/features.ts'
 import { useVoiceDictation } from '../lib/useVoiceDictation.ts'
 import { ComposerPlusMenu } from './ComposerPlusMenu.tsx'
 import { ContextWindowPicker } from './ContextWindowPicker.tsx'
@@ -45,7 +48,19 @@ import { Dialog } from './Dialog.tsx'
 import { DocumentChip, DocumentPreviewModal } from './DocumentChip.tsx'
 import { PermissionPicker } from './PermissionPicker.tsx'
 
-export type SlashAction = 'compact' | 'new' | 'plan' | 'auto' | 'manual' | 'bypass' | 'revoke' | 'browser' | 'remember'
+export type SlashAction =
+  | 'compact'
+  | 'new'
+  | 'plan'
+  | 'auto'
+  | 'manual'
+  | 'bypass'
+  | 'revoke'
+  | 'browser'
+  | 'remember'
+  | 'orchestrator'
+  | 'ultracode'
+  | 'import'
 
 interface Props {
   busy: boolean
@@ -243,13 +258,40 @@ export function Composer({
     })),
   ]
 
+  const ft = useFeatureText()
   const allowBypass = useStore((s) => s.settings?.allowBypassPermissions !== false)
+  const orchestratorOn = useStore((s) => s.settings?.orchestratorEnabled === true)
+  const ultracodeOn = useStore((s) => s.settings?.ultracode === true)
   const voice = useVoiceDictation((spoken) => insertText(spoken))
   const allSlash = [
     ...(onTogglePlan || onSlashCommand ? [{ id: 'plan', cmd: '/plan', desc: t('mode.slashPlan'), icon: ListChecks }] : []),
     ...(onSelectMode || onSlashCommand ? [{ id: 'auto', cmd: '/auto', desc: t('mode.modes.auto.desc'), icon: Sparkles }] : []),
     ...(onSelectMode || onSlashCommand ? [{ id: 'manual', cmd: '/manual', desc: t('mode.modes.manual.desc'), icon: ShieldCheck }] : []),
     ...(allowBypass && (onSelectMode || onSlashCommand) ? [{ id: 'bypass', cmd: '/bypass', desc: t('mode.modes.bypass.desc'), icon: ShieldAlert }] : []),
+    ...(onSlashCommand
+      ? [
+          {
+            id: 'orchestrator',
+            cmd: '/orchestrator',
+            desc: ft('orchestrator.slashDesc'),
+            badge: orchestratorOn ? ft('orchestrator.on') : ft('orchestrator.off'),
+            icon: GitCompareArrows,
+          },
+          {
+            id: 'ultracode',
+            cmd: '/ultracode',
+            desc: ft('ultracode.slashDesc'),
+            badge: ultracodeOn ? t('ultracode.on') : t('ultracode.off'),
+            icon: Sparkles,
+          },
+          {
+            id: 'import',
+            cmd: '/import',
+            desc: ft('sessionImport.slashDesc'),
+            icon: FolderInput,
+          },
+        ]
+      : []),
     ...(canCompact && onSlashCommand ? [{ id: 'compact', cmd: '/compact', desc: t('chat.slashCompact'), icon: Minimize2 }] : []),
     ...(onSlashCommand ? [{ id: 'browser', cmd: '/browser', desc: t('chat.slashBrowser'), icon: Globe }] : []),
     ...(onSlashCommand ? [{ id: 'remember', cmd: '/remember', desc: t('chat.slashRemember'), icon: Brain }] : []),

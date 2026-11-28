@@ -1,8 +1,9 @@
 // One small external store for the whole UI. Core events update it; views
 // read it with useStore(selector).
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import type { CoreEvent } from '@shared/ipc.ts'
 import type {
+  ActivePluginThemePayload,
   AgentEvent,
   AppSettings,
   ApprovalRequest,
@@ -12,6 +13,7 @@ import type {
   ComputerUseMode,
   Conversation,
   ConversationMeta,
+  ConversationPlan,
   DiffReviewComment,
   ImageAttachment,
   InstalledPlugin,
@@ -19,6 +21,7 @@ import type {
   McpServerConfig,
   McpServerStatus,
   MemoryItem,
+  OrchestratorPhase,
   PluginCandidate,
   ProviderConfig,
   QueuedMessage,
@@ -30,10 +33,16 @@ import type {
   UpdateState,
 } from '@shared/types.ts'
 import type { PreviewServerInfo } from '@shared/studio_features.ts'
+import type {
+  PlatformAgentProfile,
+  PlatformEvent,
+  PlatformSession,
+  PlatformSessionSummary,
+} from '@shared/platform.ts'
 import { call, shell } from './api.ts'
 import { RELAYPULSE_DEFAULT_ORIGIN } from '@shared/relaypulse.ts'
 
-export type View = 'chat' | 'connections' | 'market' | 'automations' | 'knowledge' | 'settings'
+export type View = 'chat' | 'connections' | 'market' | 'automations' | 'knowledge' | 'platform' | 'settings'
 
 export type SettingsSection =
   | 'general'
@@ -69,6 +78,15 @@ export interface LiveTurn {
   tools: Record<string, { status: ToolRunStatus; output?: string; images?: ImageAttachment[] }>
   approvals: ApprovalRequest[]
   compacting?: { active: boolean; auto?: boolean }
+  orchestrator?: {
+    phase: OrchestratorPhase
+    model: string
+    providerName?: string
+    plannerModel: string
+    executorModel: string
+    handoffCount: number
+  }
+  plan?: ConversationPlan | null
   error?: string
   endReason?: 'done' | 'aborted' | 'error' | 'max_rounds' | 'truncated'
   truncation?: 'token_limit' | 'stream_interrupted'
@@ -98,6 +116,7 @@ export interface State {
   paletteOpen: boolean
   fleetOpen: boolean
   policyOpen: boolean
+  sessionImportOpen: boolean
   settingsOpen: boolean
   settingsSection: SettingsSection
   settings: AppSettings | null
@@ -108,6 +127,9 @@ export interface State {
   statuses: Record<string, McpServerStatus>
   skills: SkillInfo[]
   plugins: InstalledPlugin[]
+  activePluginTheme: ActivePluginThemePayload | null
+  archiveModeOpen: boolean
+  bootReplaySeq: number
   discoveredPlugins: PluginCandidate[]
   pluginDiscoveryOpen: boolean
   terminalSessions: TerminalSessionInfo[]
@@ -137,6 +159,10 @@ export interface State {
   update: UpdateState | null
   updatePromptForced: boolean
   snoozedUpdateKey: string | null
+  platformAgents: PlatformAgentProfile[]
+  platformSessions: PlatformSessionSummary[]
+  platformSessionsById: Record<string, PlatformSession>
+  platformActiveSessionId: string | null
   toast: { id: number; text: string; tone: 'ok' | 'error' } | null
 }
 
@@ -150,6 +176,7 @@ let state: State = {
   paletteOpen: false,
   fleetOpen: false,
   policyOpen: false,
+  sessionImportOpen: false,
   settingsOpen: false,
   settingsSection: 'general',
   settings: null,
@@ -160,6 +187,9 @@ let state: State = {
   statuses: {},
   skills: [],
   plugins: [],
+  activePluginTheme: null,
+  archiveModeOpen: false,
+  bootReplaySeq: 0,
   discoveredPlugins: [],
   pluginDiscoveryOpen: false,
   terminalSessions: [],
@@ -189,6 +219,10 @@ let state: State = {
   update: null,
   updatePromptForced: false,
   snoozedUpdateKey: null,
+  platformAgents: [],
+  platformSessions: [],
+  platformSessionsById: {},
+  platformActiveSessionId: null,
   toast: null,
 }
 
@@ -216,12 +250,26 @@ export function useStore<T>(selector: (s: State) => T): T {
 
 const emptyTurn = (): LiveTurn => ({ busy: false, hasText: false, hasReasoning: false, tools: {}, approvals: [] })
 const EMPTY_STREAM: StreamTurn = { text: '', reasoning: '' }
+const activeStreams = new Map<string, StreamTurn>()
+const noopUnsub = () => undefined
 
 export function liveFor(s: State, id: string | null): LiveTurn {
   return (id && s.live[id]) || EMPTY
 }
+export function getChatStream(id: string | null): StreamTurn {
+  if (!id) return EMPTY_STREAM
+  return activeStreams.get(id) ?? state.streams[id] ?? EMPTY_STREAM
+}
 export function streamFor(s: State, id: string | null): StreamTurn {
-  return (id && s.streams[id]) || EMPTY_STREAM
+  if (!id) return EMPTY_STREAM
+  return activeStreams.get(id) ?? s.streams[id] ?? EMPTY_STREAM
+}
+export function useChatStream(id: string | null): StreamTurn {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => (id ? subscribeStream(id, onStoreChange) : noopUnsub),
+    [id],
+  )
+  return useSyncExternalStore(subscribe, () => getChatStream(id))
 }
 const EMPTY = emptyTurn()
 const autoOpenedBrowserChats = new Set<string>()
@@ -300,32 +348,39 @@ export function flushStreamDeltas(): void {
   pendingStreamDeltas.clear()
 
   const updatedStreams: Array<[string, StreamTurn]> = []
-  setState((s) => {
-    const nextStreams = { ...s.streams }
-    let nextLive: Record<string, LiveTurn> | null = null
-    for (const [id, delta] of batch) {
-      const curStream = s.streams[id] ?? EMPTY_STREAM
-      const merged: StreamTurn = {
-        text: delta.text ? curStream.text + delta.text : curStream.text,
-        reasoning: delta.reasoning ? curStream.reasoning + delta.reasoning : curStream.reasoning,
-      }
-      nextStreams[id] = merged
-      updatedStreams.push([id, merged])
+  const liveUpdates: Array<{ id: string; needTextFlag: boolean; needReasoningFlag: boolean }> = []
+  for (const [id, delta] of batch) {
+    const curStream = activeStreams.get(id) ?? state.streams[id] ?? EMPTY_STREAM
+    const merged: StreamTurn = {
+      text: delta.text ? curStream.text + delta.text : curStream.text,
+      reasoning: delta.reasoning ? curStream.reasoning + delta.reasoning : curStream.reasoning,
+    }
+    activeStreams.set(id, merged)
+    updatedStreams.push([id, merged])
 
-      const curTurn = (nextLive ?? s.live)[id] ?? emptyTurn()
-      const needTextFlag = Boolean(delta.text) && !curTurn.hasText
-      const needReasoningFlag = Boolean(delta.reasoning) && !curTurn.hasReasoning
-      if (needTextFlag || needReasoningFlag) {
-        nextLive ??= { ...s.live }
-        nextLive[id] = {
+    const curTurn = state.live[id] ?? emptyTurn()
+    const needTextFlag = Boolean(delta.text) && !curTurn.hasText
+    const needReasoningFlag = Boolean(delta.reasoning) && !curTurn.hasReasoning
+    if (needTextFlag || needReasoningFlag) {
+      liveUpdates.push({ id, needTextFlag, needReasoningFlag })
+    }
+  }
+
+  if (liveUpdates.length > 0) {
+    setState((s) => {
+      const nextLive = { ...s.live }
+      for (const u of liveUpdates) {
+        const curTurn = nextLive[u.id] ?? emptyTurn()
+        nextLive[u.id] = {
           ...curTurn,
-          ...(needTextFlag ? { hasText: true } : {}),
-          ...(needReasoningFlag ? { hasReasoning: true } : {}),
+          ...(u.needTextFlag ? { hasText: true } : {}),
+          ...(u.needReasoningFlag ? { hasReasoning: true } : {}),
         }
       }
-    }
-    return nextLive ? { streams: nextStreams, live: nextLive } : { streams: nextStreams }
-  })
+      return { live: nextLive }
+    })
+  }
+
   for (const [id, merged] of updatedStreams) {
     notifyStreamListeners(id, merged)
   }
@@ -344,12 +399,15 @@ function queueStreamDelta(id: string, kind: 'text' | 'reasoning', chunk: string)
 
 function resetStream(id: string): void {
   pendingStreamDeltas.delete(id)
-  setState((s) => {
-    if (!(id in s.streams)) return {}
-    const nextStreams = { ...s.streams }
-    delete nextStreams[id]
-    return { streams: nextStreams }
-  })
+  activeStreams.delete(id)
+  if (id in state.streams) {
+    setState((s) => {
+      if (!(id in s.streams)) return {}
+      const nextStreams = { ...s.streams }
+      delete nextStreams[id]
+      return { streams: nextStreams }
+    })
+  }
   notifyStreamListeners(id, EMPTY_STREAM)
 }
 
@@ -426,7 +484,17 @@ function onAgent(e: AgentEvent): void {
   }
   if (e.type === 'conversation_sync') {
     const conv = e.conversation
-    setState((s) => ({ conversations: { ...s.conversations, [conv.id]: conv } }))
+    setState((s) => {
+      const curLive = s.live[conv.id]
+      if (!curLive || curLive.plan === undefined) {
+        return { conversations: { ...s.conversations, [conv.id]: conv } }
+      }
+      const { plan: _droppedPlan, ...restLive } = curLive
+      return {
+        conversations: { ...s.conversations, [conv.id]: conv },
+        live: { ...s.live, [conv.id]: restLive },
+      }
+    })
     return
   }
   if (e.type === 'queue_sync') {
@@ -465,6 +533,7 @@ function onAgent(e: AgentEvent): void {
     case 'message_saved':
       if (e.message.role === 'assistant') {
         pendingStreamDeltas.delete(id)
+        activeStreams.delete(id)
         setState((s) => {
           const nextStreams = id in s.streams ? { ...s.streams } : null
           if (nextStreams) delete nextStreams[id]
@@ -491,6 +560,27 @@ function onAgent(e: AgentEvent): void {
       return
     case 'compacting':
       return updateTurn(id, () => ({ compacting: e.active ? { active: true, auto: e.auto } : undefined }))
+    case 'orchestrator_phase':
+      return updateTurn(id, () => ({
+        orchestrator: {
+          phase: e.phase,
+          model: e.model,
+          providerName: e.providerName,
+          plannerModel: e.plannerModel,
+          executorModel: e.executorModel,
+          handoffCount: e.handoffCount,
+        },
+      }))
+    case 'plan_update':
+      setState((s) => {
+        const conv = s.conversations[id]
+        const curLive = s.live[id] ?? emptyTurn()
+        return {
+          ...(conv ? { conversations: { ...s.conversations, [id]: { ...conv, plan: e.plan ?? undefined } } } : {}),
+          live: { ...s.live, [id]: { ...curLive, plan: e.plan } },
+        }
+      })
+      return
     case 'hook_event':
       if (e.decision === 'block' || e.decision === 'warn') {
         const msg = e.message ? `: ${e.message}` : ''
@@ -502,6 +592,7 @@ function onAgent(e: AgentEvent): void {
       return updateTurn(id, () => ({ error: e.message }))
     case 'turn_end': {
       pendingStreamDeltas.delete(id)
+      activeStreams.delete(id)
       setState((s) => {
         const isCurrentVisible = s.view === 'chat' && s.activeChatId === id
         const nextStreams = id in s.streams ? { ...s.streams } : null
@@ -573,8 +664,133 @@ export async function refreshKnowledgeAndMemory(workspace?: string): Promise<voi
   setState({ memories, knowledge })
 }
 
+const pendingPlatformDeltas = new Map<string, { sessionId: string; taskId: string; output: string; thinking: string }>()
+let platformFlushHandle: number | ReturnType<typeof setTimeout> | null = null
+let platformFlushUsesRaf = false
+
+function schedulePlatformDeltaFlush(): void {
+  if (platformFlushHandle !== null) return
+  if (typeof requestAnimationFrame === 'function') {
+    platformFlushUsesRaf = true
+    platformFlushHandle = requestAnimationFrame(() => {
+      platformFlushHandle = null
+      flushPlatformDeltas()
+    })
+  } else {
+    platformFlushUsesRaf = false
+    platformFlushHandle = setTimeout(() => {
+      platformFlushHandle = null
+      flushPlatformDeltas()
+    }, 16)
+  }
+}
+
+export function flushPlatformDeltas(): void {
+  if (platformFlushHandle !== null) {
+    if (platformFlushUsesRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(platformFlushHandle as number)
+    } else {
+      clearTimeout(platformFlushHandle as ReturnType<typeof setTimeout>)
+    }
+    platformFlushHandle = null
+  }
+  if (pendingPlatformDeltas.size === 0) return
+  const batch = new Map(pendingPlatformDeltas)
+  pendingPlatformDeltas.clear()
+
+  setState((s) => {
+    let nextSessionsById: Record<string, PlatformSession> | null = null
+    for (const delta of batch.values()) {
+      const sourceSessions: Record<string, PlatformSession> = nextSessionsById ?? s.platformSessionsById
+      const sess: PlatformSession | undefined = sourceSessions[delta.sessionId]
+      if (!sess) continue
+      const idx = sess.tasks.findIndex((t) => t.id === delta.taskId)
+      if (idx < 0) continue
+      const target = sess.tasks[idx]!
+      const nextTasks = [...sess.tasks]
+      nextTasks[idx] = {
+        ...target,
+        ...(delta.output ? { output: target.output + delta.output } : {}),
+        ...(delta.thinking ? { thinking: (target.thinking ?? '') + delta.thinking } : {}),
+      }
+      if (!nextSessionsById) nextSessionsById = { ...s.platformSessionsById }
+      nextSessionsById[delta.sessionId] = { ...sess, tasks: nextTasks }
+    }
+    return nextSessionsById ? { platformSessionsById: nextSessionsById } : {}
+  })
+}
+
+function onPlatform(p: PlatformEvent): void {
+  if (p.type === 'agents') {
+    setState({ platformAgents: p.agents })
+    return
+  }
+  if (p.type === 'sessions_list') {
+    setState({ platformSessions: p.sessions })
+    return
+  }
+  if (p.type === 'session_update') {
+    flushPlatformDeltas()
+    const sess = p.session
+    const summary: PlatformSessionSummary = {
+      id: sess.id,
+      title: sess.title,
+      workspace: sess.workspace,
+      commanderId: sess.commanderId,
+      workerIds: [...sess.workerIds],
+      useWorktrees: sess.useWorktrees,
+      status: sess.status,
+      taskCount: sess.tasks.length,
+      runningCount: sess.tasks.filter((t) => t.status === 'running').length,
+      createdAt: sess.createdAt,
+      updatedAt: sess.updatedAt,
+    }
+    setState((s) => {
+      const rest = s.platformSessions.filter((x) => x.id !== sess.id)
+      return {
+        platformSessionsById: { ...s.platformSessionsById, [sess.id]: sess },
+        platformSessions: [summary, ...rest].sort((a, b) => b.updatedAt - a.updatedAt),
+        platformActiveSessionId: s.platformActiveSessionId ?? sess.id,
+      }
+    })
+    return
+  }
+  if (p.type === 'task_log') {
+    flushPlatformDeltas()
+    setState((s) => {
+      const sess = s.platformSessionsById[p.sessionId]
+      if (!sess) return {}
+      const idx = sess.tasks.findIndex((t) => t.id === p.taskId)
+      if (idx < 0) return {}
+      const target = sess.tasks[idx]!
+      if (target.logs.some((l) => l.id === p.entry.id)) return {}
+      const nextTasks = [...sess.tasks]
+      nextTasks[idx] = { ...target, logs: [...target.logs, p.entry].slice(-400) }
+      return {
+        platformSessionsById: {
+          ...s.platformSessionsById,
+          [p.sessionId]: { ...sess, tasks: nextTasks },
+        },
+      }
+    })
+    return
+  }
+  if (p.type === 'task_delta') {
+    if (!p.delta) return
+    const key = `${p.sessionId}::${p.taskId}`
+    let entry = pendingPlatformDeltas.get(key)
+    if (!entry) {
+      entry = { sessionId: p.sessionId, taskId: p.taskId, output: '', thinking: '' }
+      pendingPlatformDeltas.set(key, entry)
+    }
+    entry[p.field] += p.delta
+    schedulePlatformDeltaFlush()
+  }
+}
+
 export function handleCoreEvent(event: CoreEvent): void {
   if (event.channel === 'agent') onAgent(event.payload)
+  else if (event.channel === 'platform') onPlatform(event.payload)
   else if (event.channel === 'mcp') setState((s) => ({ statuses: { ...s.statuses, [event.payload.id]: event.payload } }))
   else if (event.channel === 'chats') setState({ chats: event.payload })
   else if (event.channel === 'terminal') {
@@ -655,9 +871,11 @@ export async function loadAll(): Promise<void> {
     call('sandbox.info').catch(() => null),
     call('browser.state').catch(() => null),
     call('preview.list').catch(() => [] as PreviewServerInfo[]),
+    call('platform.agents').catch(() => [] as PlatformAgentProfile[]),
+    call('platform.sessions').catch(() => [] as PlatformSessionSummary[]),
   ])
 
-  const [settings, providers, servers, statuses, chats, sessionAllows, account, update] = await Promise.all([
+  const [settings, providers, servers, statuses, chats, sessionAllows, account, update, activePluginTheme] = await Promise.all([
     call('settings.get'),
     call('providers.list'),
     call('mcp.list'),
@@ -666,6 +884,7 @@ export async function loadAll(): Promise<void> {
     call('agent.allows').catch(() => [] as string[]),
     call('account.state').catch(() => ({ origin: RELAYPULSE_DEFAULT_ORIGIN, connected: false })),
     shell.updateState().catch(() => null),
+    call('plugins.activeTheme').catch(() => null),
   ])
   setState({
     ready: true,
@@ -676,10 +895,11 @@ export async function loadAll(): Promise<void> {
     chats,
     sessionAllows,
     update,
+    activePluginTheme,
     statuses: Object.fromEntries(statuses.map((st) => [st.id, st])),
   })
 
-  void secondaryPromise.then(([skills, plugins, terminalSessions, automations, sandboxInfo, browserSnapshot, previewServers]) => {
+  void secondaryPromise.then(([skills, plugins, terminalSessions, automations, sandboxInfo, browserSnapshot, previewServers, platformAgents, platformSessions]) => {
     setState((s) => {
       const bKey = browserSnapshot?.conversationId || '__default__'
       return {
@@ -694,6 +914,9 @@ export async function loadAll(): Promise<void> {
         sandboxInfo,
         browserSnapshot,
         previewServers,
+        platformAgents,
+        platformSessions,
+        platformActiveSessionId: s.platformActiveSessionId ?? platformSessions[0]?.id ?? null,
         ...(browserSnapshot ? { browserSnapshotsByChat: { ...s.browserSnapshotsByChat, [bKey]: browserSnapshot } } : {}),
       }
     })
@@ -776,7 +999,14 @@ export function canGoForward(s: State = state): boolean {
 }
 
 export function openSettings(section: SettingsSection = 'general'): void {
-  setState({ settingsOpen: true, settingsSection: section, paletteOpen: false, fleetOpen: false, policyOpen: false })
+  setState({
+    settingsOpen: true,
+    settingsSection: section,
+    paletteOpen: false,
+    fleetOpen: false,
+    policyOpen: false,
+    sessionImportOpen: false,
+  })
 }
 
 export function closeSettings(): void {
@@ -784,7 +1014,13 @@ export function closeSettings(): void {
 }
 
 export function openFleetModal(): void {
-  setState({ fleetOpen: true, policyOpen: false, paletteOpen: false, settingsOpen: false })
+  setState({
+    fleetOpen: true,
+    policyOpen: false,
+    sessionImportOpen: false,
+    paletteOpen: false,
+    settingsOpen: false,
+  })
 }
 
 export function closeFleetModal(): void {
@@ -792,11 +1028,31 @@ export function closeFleetModal(): void {
 }
 
 export function openPolicyModal(): void {
-  setState({ policyOpen: true, fleetOpen: false, paletteOpen: false, settingsOpen: false })
+  setState({
+    policyOpen: true,
+    fleetOpen: false,
+    sessionImportOpen: false,
+    paletteOpen: false,
+    settingsOpen: false,
+  })
 }
 
 export function closePolicyModal(): void {
   setState({ policyOpen: false })
+}
+
+export function openSessionImportModal(): void {
+  setState({
+    sessionImportOpen: true,
+    fleetOpen: false,
+    policyOpen: false,
+    paletteOpen: false,
+    settingsOpen: false,
+  })
+}
+
+export function closeSessionImportModal(): void {
+  setState({ sessionImportOpen: false })
 }
 
 export function navigate(target: NavEntry, opts?: { replace?: boolean }): void {
@@ -916,18 +1172,32 @@ export async function toggleSkillEnabled(name: string, enabled: boolean, workspa
   setState({ skills })
 }
 
+export function setArchiveModeOpen(open: boolean): void {
+  setState({ archiveModeOpen: open, paletteOpen: false })
+}
+
+export function toggleArchiveMode(): void {
+  setState((s) => ({ archiveModeOpen: !s.archiveModeOpen, paletteOpen: false }))
+}
+
+export function replayPluginBoot(): void {
+  setState((s) => ({ bootReplaySeq: s.bootReplaySeq + 1 }))
+}
+
 export async function refreshPlugins(workspace?: string): Promise<InstalledPlugin[]> {
   const ws = workspace ?? getState().settings?.workspace
-  const [plugins, skills, servers, statuses] = await Promise.all([
+  const [plugins, skills, servers, statuses, activePluginTheme] = await Promise.all([
     call('plugins.list').catch(() => [] as InstalledPlugin[]),
     call('skills.list', ws).catch(() => [] as SkillInfo[]),
     call('mcp.list').catch(() => [] as McpServerConfig[]),
     call('mcp.status').catch(() => [] as McpServerStatus[]),
+    call('plugins.activeTheme').catch(() => null),
   ])
   setState({
     plugins,
     skills,
     servers,
+    activePluginTheme,
     statuses: Object.fromEntries(statuses.map((st) => [st.id, st])),
   })
   return plugins

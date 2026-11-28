@@ -3,23 +3,33 @@ import { useTranslation } from 'react-i18next'
 import { applyLocale } from './i18n.ts'
 import { errorMessage, shell } from './lib/api.ts'
 import { startColumnResize } from './lib/resize.ts'
-import { getState, goBack, goForward, handleCoreEvent, loadAll, requestOpenTerminalDrawer, scanLocalPlugins, setState, toggleSidebar, useStore } from './lib/store.ts'
+import { getState, goBack, goForward, handleCoreEvent, loadAll, requestOpenTerminalDrawer, scanLocalPlugins, setArchiveModeOpen, setState, toggleArchiveMode, toggleSidebar, useStore } from './lib/store.ts'
+import { playRhineSound, unlockRhineAudio } from './lib/rhineAudio.ts'
 import { Sidebar } from './components/Sidebar.tsx'
 import { TopBar } from './components/TopBar.tsx'
 import { UpdatePrompt } from './components/UpdatePrompt.tsx'
 import { AccountGateView, AccountModal } from './components/AccountPanel.tsx'
 import { Oculus } from './components/Oculus.tsx'
+import { PluginBootOverlay } from './components/PluginBootOverlay.tsx'
+import { PluginThemeEffects } from './components/PluginThemeEffects.tsx'
 import { newChat, stopChat } from './lib/chats.ts'
 import { ChatView } from './views/ChatView.tsx'
+
+const RhineArchiveBackdrop = lazy(() =>
+  import('./components/RhineArchiveBackdrop.tsx').then((m) => ({ default: m.RhineArchiveBackdrop })),
+)
 
 const CommandPalette = lazy(() => import('./components/CommandPalette.tsx').then((m) => ({ default: m.CommandPalette })))
 const FleetModal = lazy(() => import('./components/FleetModal.tsx').then((m) => ({ default: m.FleetModal })))
 const PolicyModal = lazy(() => import('./components/PolicyModal.tsx').then((m) => ({ default: m.PolicyModal })))
+const SessionImportModal = lazy(() => import('./components/SessionImportModal.tsx').then((m) => ({ default: m.SessionImportModal })))
 const PluginDiscoveryModal = lazy(() => import('./components/PluginDiscoveryModal.tsx').then((m) => ({ default: m.PluginDiscoveryModal })))
 const AutomationsView = lazy(() => import('./views/AutomationsView.tsx').then((m) => ({ default: m.AutomationsView })))
 const ConnectionsView = lazy(() => import('./views/ConnectionsView.tsx').then((m) => ({ default: m.ConnectionsView })))
 const KnowledgeView = lazy(() => import('./views/KnowledgeView.tsx').then((m) => ({ default: m.KnowledgeView })))
 const MarketView = lazy(() => import('./views/MarketView.tsx').then((m) => ({ default: m.MarketView })))
+const PlatformView = lazy(() => import('./views/PlatformView.tsx').then((m) => ({ default: m.PlatformView })))
+const RhineArchiveMode = lazy(() => import('./views/RhineArchiveMode.tsx').then((m) => ({ default: m.RhineArchiveMode })))
 const SettingsModal = lazy(() => import('./views/SettingsView.tsx').then((m) => ({ default: m.SettingsModal })))
 const Onboarding = lazy(() => import('./views/Onboarding.tsx').then((m) => ({ default: m.Onboarding })))
 
@@ -74,11 +84,34 @@ export function App() {
   const paletteOpen = useStore((s) => s.paletteOpen)
   const fleetOpen = useStore((s) => s.fleetOpen)
   const policyOpen = useStore((s) => s.policyOpen)
+  const sessionImportOpen = useStore((s) => s.sessionImportOpen)
   const pluginDiscoveryOpen = useStore((s) => s.pluginDiscoveryOpen)
+  const activePluginTheme = useStore((s) => s.activePluginTheme)
+  const archiveModeOpen = useStore((s) => s.archiveModeOpen)
+  const hasArchiveMode = Boolean(activePluginTheme?.effects?.archiveMode)
+  const bootReplaySeq = useStore((s) => s.bootReplaySeq)
+  const chats = useStore((s) => s.chats)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const isWelcomeStage = useStore(
+    (s) => s.view === 'chat' && (!s.activeChatId || (s.conversations[s.activeChatId]?.messages.length ?? 0) === 0),
+  )
+  const activeChatIndex = activeChatId ? chats.findIndex((c) => c.id === activeChatId) : -1
+  const activeChat = activeChatIndex >= 0 ? chats[activeChatIndex] : undefined
+  const sessionKey = activeChatId ?? 'home'
+  const sessionCode = activeChatIndex >= 0 ? `C-${String(activeChatIndex + 1).padStart(3, '0')}` : 'X-000'
+  const sessionTitle = activeChat?.title?.trim() || (activeChatId ? 'UNTITLED SESSION' : 'WELCOME // STANDBY')
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const toast = useStore((s) => s.toast)
   const loadError = useStore((s) => (s.ready ? null : s.toast?.text))
   const scannedPluginsRef = useRef(false)
+  const initialBootPlayedRef = useRef(false)
+  const lastReplaySeqRef = useRef(0)
+  const workbenchEnterTimerRef = useRef<number | null>(null)
+  const workbenchEnterSeqRef = useRef(0)
+  const [bootVisible, setBootVisible] = useState(false)
+  const [bootRunKey, setBootRunKey] = useState(0)
+  const [workbenchEntering, setWorkbenchEntering] = useState(false)
+  const [workbenchEnterSeq, setWorkbenchEnterSeq] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState<number>(loadSavedSidebarWidth)
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const sidebarDragCleanupRef = useRef<(() => void) | null>(null)
@@ -89,6 +122,9 @@ export function App() {
     return () => {
       window.removeEventListener('resize', onResize)
       sidebarDragCleanupRef.current?.()
+      if (workbenchEnterTimerRef.current !== null) {
+        window.clearTimeout(workbenchEnterTimerRef.current)
+      }
     }
   }, [])
 
@@ -147,6 +183,18 @@ export function App() {
       if (mod && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setState((s) => ({ paletteOpen: !s.paletteOpen }))
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'a') {
+        const s = getState()
+        if (s.activePluginTheme?.effects?.archiveMode) {
+          e.preventDefault()
+          if (s.archiveModeOpen) {
+            window.dispatchEvent(new CustomEvent('atrium:rhine-archive-request-exit'))
+          } else {
+            unlockRhineAudio()
+            playRhineSound('array')
+            toggleArchiveMode()
+          }
+        }
       } else if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') {
         e.preventDefault()
         void newChat()
@@ -180,6 +228,58 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   useTheme(settings?.theme)
+  useEffect(() => {
+    const root = document.documentElement
+    const styleId = 'atrium-plugin-theme'
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null
+
+    if (activePluginTheme) {
+      root.dataset.pluginTheme = activePluginTheme.themeId
+      if (activePluginTheme.css) {
+        if (!styleEl) {
+          styleEl = document.createElement('style')
+          styleEl.id = styleId
+          document.head.appendChild(styleEl)
+        }
+        styleEl.textContent = activePluginTheme.css
+      } else if (styleEl) {
+        styleEl.remove()
+      }
+    } else {
+      delete root.dataset.pluginTheme
+      styleEl?.remove()
+    }
+
+    return () => {
+      delete root.dataset.pluginTheme
+      document.getElementById(styleId)?.remove()
+    }
+  }, [activePluginTheme])
+
+  useEffect(() => {
+    if (!hasArchiveMode && archiveModeOpen) {
+      setArchiveModeOpen(false)
+    }
+  }, [hasArchiveMode, archiveModeOpen])
+
+  useEffect(() => {
+    if (!ready || !settings || !account.connected || !settings.onboarded) return
+    if (activePluginTheme?.boot && !initialBootPlayedRef.current) {
+      initialBootPlayedRef.current = true
+      setBootRunKey((k) => k + 1)
+      setBootVisible(true)
+    }
+  }, [ready, settings, account.connected, settings?.onboarded, activePluginTheme])
+
+  useEffect(() => {
+    if (bootReplaySeq <= 0 || bootReplaySeq === lastReplaySeqRef.current) return
+    lastReplaySeqRef.current = bootReplaySeq
+    if (activePluginTheme?.boot) {
+      setBootRunKey((k) => k + 1)
+      setBootVisible(true)
+    }
+  }, [bootReplaySeq, activePluginTheme])
+
   useEffect(() => {
     if (!settings) return
     const root = document.documentElement
@@ -217,9 +317,24 @@ export function App() {
     )
   }
 
+  const handleCloseArchiveMode = () => {
+    setArchiveModeOpen(false)
+    workbenchEnterSeqRef.current += 1
+    setWorkbenchEnterSeq(workbenchEnterSeqRef.current)
+    setWorkbenchEntering(true)
+    if (workbenchEnterTimerRef.current !== null) {
+      window.clearTimeout(workbenchEnterTimerRef.current)
+    }
+    workbenchEnterTimerRef.current = window.setTimeout(() => {
+      workbenchEnterTimerRef.current = null
+      setWorkbenchEntering(false)
+    }, 560)
+  }
+
   return (
     <div
       className={`app${sidebarOpen ? '' : ' collapsed'}${resizingSidebar ? ' is-resizing-sidebar' : ''}`}
+      data-workbench-entering={workbenchEntering ? 'true' : undefined}
       style={sidebarOpen ? ({ '--sidebar-w': `${sidebarWidth}px` } as CSSProperties) : undefined}
     >
       <Sidebar
@@ -230,6 +345,23 @@ export function App() {
         onResetWidth={resetSidebarWidth}
       />
       <main className="main">
+        {workbenchEntering && (
+          <div key={workbenchEnterSeq} className="rl-workbench-handover-line" aria-hidden="true" />
+        )}
+        {activePluginTheme?.effects?.archiveBackdrop && !archiveModeOpen && (
+          <Suspense fallback={null}>
+            <RhineArchiveBackdrop
+              paused={bootVisible}
+              density={isWelcomeStage ? 'vivid' : 'subtle'}
+              activityKey={`${view}:${sessionKey}`}
+              sessionKey={sessionKey}
+              sessionIndex={activeChatIndex}
+              sessionCode={sessionCode}
+              sessionTitle={sessionTitle}
+              enableAudio={Boolean(activePluginTheme?.effects?.tactileAudio)}
+            />
+          </Suspense>
+        )}
         {view !== 'chat' && <TopBar />}
         {view === 'chat' && <ChatView />}
         {view !== 'chat' && (
@@ -238,6 +370,7 @@ export function App() {
             {view === 'market' && <MarketView />}
             {view === 'automations' && <AutomationsView />}
             {view === 'knowledge' && <KnowledgeView />}
+            {view === 'platform' && <PlatformView />}
           </Suspense>
         )}
       </main>
@@ -267,11 +400,38 @@ export function App() {
           <PolicyModal />
         </Suspense>
       )}
+      {sessionImportOpen && (
+        <Suspense fallback={null}>
+          <SessionImportModal />
+        </Suspense>
+      )}
       <UpdatePrompt />
       {pluginDiscoveryOpen && (
         <Suspense fallback={null}>
           <PluginDiscoveryModal />
         </Suspense>
+      )}
+      {activePluginTheme &&
+        (activePluginTheme.chrome === 'rhine-lab' ||
+          activePluginTheme.effects?.clickReticle ||
+          activePluginTheme.effects?.telemetryHud ||
+          activePluginTheme.effects?.tactileAudio ||
+          activePluginTheme.effects?.rollingClock) && (
+          <PluginThemeEffects theme={activePluginTheme} />
+        )}
+      {hasArchiveMode && archiveModeOpen && (
+        <Suspense fallback={null}>
+          <RhineArchiveMode onClose={handleCloseArchiveMode} />
+        </Suspense>
+      )}
+      {bootVisible && activePluginTheme?.boot && (
+        <PluginBootOverlay
+          key={bootRunKey}
+          boot={activePluginTheme.boot}
+          themeId={activePluginTheme.themeId}
+          tactileAudio={Boolean(activePluginTheme.effects?.tactileAudio)}
+          onDone={() => setBootVisible(false)}
+        />
       )}
     </div>
   )

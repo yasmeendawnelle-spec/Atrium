@@ -29,7 +29,7 @@ class MockAutoUpdater extends EventEmitter implements AutoUpdaterLike {
   onCheck?: () => Promise<void> | void
   onDownload?: () => Promise<void> | void
 
-  setFeedURL(options: { provider: 'generic'; url: string } | string): void {
+  setFeedURL(options: { provider: 'generic'; url: string; useMultipleRangeRequest?: boolean } | string): void {
     this.feedHistory.push(options)
   }
 
@@ -164,7 +164,9 @@ test('AppUpdaterController transitions through download to Restart to upgrade an
   })
   t.after(() => ctrl.dispose())
 
-  assert.deepEqual(mock.feedHistory, [{ provider: 'generic', url: 'https://updates.myorg.dev/win' }])
+  assert.deepEqual(mock.feedHistory, [
+    { provider: 'generic', url: 'https://updates.myorg.dev/win', useMultipleRangeRequest: false },
+  ])
   assert.equal(mock.forceDevUpdateConfig, true)
 
   const finalState = await ctrl.checkForUpdates()

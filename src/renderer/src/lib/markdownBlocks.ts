@@ -1,3 +1,11 @@
+function isClosingFence(trimmed: string, fenceChar: string, fenceLen: number): boolean {
+  if (trimmed.length < fenceLen) return false
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] !== fenceChar) return false
+  }
+  return true
+}
+
 /**
  * Splits Markdown into top-level blocks at blank lines outside fenced code blocks
  * so streaming updates only re-parse the trailing incomplete block while earlier blocks remain memoized.
@@ -14,24 +22,22 @@ export function splitStreamingMarkdownBlocks(text: string): string[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     const trimmed = line.trim()
-    const fenceMatch = /^(`{3,}|~{3,})(.*)$/.exec(trimmed)
-
-    if (!fenceChar && fenceMatch) {
-      if (pendingBlank && current.length > 0) {
-        blocks.push(current.join('\n'))
-        current = []
-        pendingBlank = false
+    if (!fenceChar) {
+      const fenceMatch = /^(`{3,}|~{3,})(.*)$/.exec(trimmed)
+      if (fenceMatch) {
+        if (pendingBlank && current.length > 0) {
+          blocks.push(current.join('\n'))
+          current = []
+          pendingBlank = false
+        }
+        fenceChar = fenceMatch[1]![0]!
+        fenceLen = fenceMatch[1]!.length
+        current.push(line)
+        continue
       }
-      fenceChar = fenceMatch[1]![0]!
-      fenceLen = fenceMatch[1]!.length
+    } else {
       current.push(line)
-      continue
-    }
-
-    if (fenceChar) {
-      current.push(line)
-      const closeMatch = new RegExp(`^${fenceChar}{${fenceLen},}\\s*$`).test(trimmed)
-      if (closeMatch) {
+      if (isClosingFence(trimmed, fenceChar, fenceLen)) {
         fenceChar = null
         fenceLen = 0
       }

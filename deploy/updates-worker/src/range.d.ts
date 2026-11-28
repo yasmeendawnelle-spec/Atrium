@@ -20,6 +20,17 @@ export type ParsedRangeResult =
   | { kind: 'unsatisfiable' }
   | { kind: 'ranges'; ranges: Array<{ start: number; end: number }> }
 
+export interface UpdateRequestOptions {
+  githubRepo?: string
+  fetchImpl?: (url: string, init?: RequestInit, meta?: { noStore?: boolean }) => Promise<Response>
+}
+
 export function sanitizeAssetName(raw: string): string | null
+export function extractReleaseTagFromFilename(filename: string): string | null
+export function buildGitHubAssetUrls(repo: string, filename: string): string[]
 export function parseRangeHeader(headerValue: string | null, totalSize: number): ParsedRangeResult
-export function handleUpdateRequest(request: Request, store: UpdateObjectStore): Promise<Response>
+export function handleUpdateRequest(
+  request: Request,
+  store: UpdateObjectStore | null,
+  options?: UpdateRequestOptions,
+): Promise<Response>

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FolderOpen, GitFork, MessageSquare, Minimize2, Moon, Package, Plug, Plus, RefreshCw, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Sun } from 'lucide-react'
+import { ExternalLink, FolderInput, FolderOpen, GitCompareArrows, GitFork, MessageSquare, Minimize2, Moon, Network, Package, Plug, Plus, RefreshCw, RotateCw, Search, Settings, ShieldCheck, Sparkles, Store, Sun } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { isEmptyChatStub } from '@shared/types.ts'
+import { resolveOrchestratorExecutor, shortModelLabel } from '@shared/orchestrator.ts'
 import { call, shell } from '../lib/api.ts'
 import { compactChat, newChat, openChat } from '../lib/chats.ts'
-import { checkForUpdates, installAppUpdate, navigate, openFleetModal, openPolicyModal, openSettings, setState, toast, useStore } from '../lib/store.ts'
+import { checkForUpdates, installAppUpdate, navigate, openFleetModal, openPolicyModal, openSessionImportModal, openSettings, setState, toast, useStore } from '../lib/store.ts'
 import { useFeatureText } from '../locales/features.ts'
 import { folderName, setWorkspace } from './WorkspacePicker.tsx'
 
@@ -129,6 +130,37 @@ export function CommandPalette() {
         run: () => openSettings('general'),
       },
       {
+        id: 'act:orchestrator',
+        group: 'action',
+        label: ft('orchestrator.title'),
+        sub: (() => {
+          const on = settings?.orchestratorEnabled === true
+          if (!on) return ft('orchestrator.off')
+          const activeP = providers.find((p) => p.id === (settings?.activeProviderId ?? providers[0]?.id)) ?? providers[0]
+          if (!activeP) return ft('orchestrator.on')
+          const resolved = resolveOrchestratorExecutor(providers, activeP, settings ?? {})
+          return `${shortModelLabel(activeP.model)} → ${shortModelLabel(resolved.model)}`
+        })(),
+        icon: GitCompareArrows,
+        active: settings?.orchestratorEnabled === true,
+        run: async () => {
+          const next = !(settings?.orchestratorEnabled === true)
+          setState({ settings: await call('settings.update', { orchestratorEnabled: next }) })
+        },
+      },
+      {
+        id: 'act:ultracode',
+        group: 'action',
+        label: 'Ultracode',
+        sub: settings?.ultracode === true ? t('ultracode.on') : t('ultracode.off'),
+        icon: Sparkles,
+        active: settings?.ultracode === true,
+        run: async () => {
+          const next = !(settings?.ultracode === true)
+          setState({ settings: await call('settings.update', { ultracode: next }) })
+        },
+      },
+      {
         id: 'act:fleet',
         group: 'action',
         label: ft('fleet.navLabel'),
@@ -137,12 +169,28 @@ export function CommandPalette() {
         run: () => openFleetModal(),
       },
       {
+        id: 'act:platform',
+        group: 'action',
+        label: ft('platform.paletteLabel'),
+        sub: ft('platform.paletteSub'),
+        icon: Network,
+        run: () => navigate({ view: 'platform', chatId: null }),
+      },
+      {
         id: 'act:policy',
         group: 'action',
         label: ft('policy.navLabel'),
         sub: '.atrium/policy.json',
         icon: ShieldCheck,
         run: () => openPolicyModal(),
+      },
+      {
+        id: 'act:import-sessions',
+        group: 'action',
+        label: ft('sessionImport.paletteLabel'),
+        sub: 'Claude Code · Codex · DSH · Cursor · Antigravity',
+        icon: FolderInput,
+        run: () => openSessionImportModal(),
       },
       {
         id: 'act:check-updates',
